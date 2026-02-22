@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>출근 관리 시스템</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Vue.js 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    
+    <!-- Axios -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    
+    <style>
+        body {
+            background-color: #f5f5f5;
+        }
+        
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .calendar-table {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .calendar-table td {
+            min-width: 100px;
+            padding: 8px;
+            font-size: 12px;
+        }
+        
+        .calendar-table th {
+            background-color: #667eea;
+            color: white;
+            padding: 10px;
+            font-size: 13px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .weekend {
+            background-color: #fff3cd;
+        }
+        
+        .annual-leave {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .business-trip {
+            color: #0d6efd;
+        }
+        
+        .employee-name {
+            font-weight: bold;
+            position: sticky;
+            left: 0;
+            background: white;
+            z-index: 5;
+        }
+        
+        .employee-dept {
+            position: sticky;
+            left: 0;
+            background: white;
+            z-index: 5;
+        }
+        
+        .editable-cell {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .editable-cell:hover {
+            background-color: #e9ecef;
+        }
+        
+        .sync-button {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- 네비게이션 바 -->
+        <nav class="navbar navbar-dark mb-4">
+            <div class="container-fluid">
+                <span class="navbar-brand mb-0 h1">🕐 출근 관리 시스템</span>
+                <div class="d-flex">
+                    <button class="btn btn-light me-2" @click="showEmployeeModal = true">
+                        👥 직원 관리
+                    </button>
+                    <button class="btn btn-success sync-button" @click="syncFromDauoffice">
+                        🔄 다우오피스 동기화
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container-fluid">
+            <!-- 월 선택 -->
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-auto">
+                                    <label class="form-label">연도</label>
+                                    <select class="form-select" v-model="selectedYear" @change="loadAttendance">
+                                        <option v-for="year in years" :value="year">{{ year }}</option>
+                                    </select>
+                                </div>
+                                <div class="col-auto">
+                                    <label class="form-label">월</label>
+                                    <select class="form-select" v-model="selectedMonth" @change="loadAttendance">
+                                        <option v-for="month in 12" :value="month">{{ month }}월</option>
+                                    </select>
+                                </div>
+                                <div class="col-auto d-flex align-items-end">
+                                    <button class="btn btn-primary" @click="exportExcel">
+                                        📥 엑셀 다운로드
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 출근 캘린더 테이블 -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="table-responsive" style="max-height: 600px; overflow: auto;">
+                        <table class="table table-bordered calendar-table">
+                            <thead>
+                                <tr>
+                                    <th style="left: 0; z-index: 15;">성명</th>
+                                    <th style="left: 120px; z-index: 15;">부서/팀</th>
+                                    <th v-for="day in daysInMonth" :key="day.day" :class="{'weekend': day.isWeekend}">
+                                        {{ selectedMonth }}-{{ day.day }}<br>({{ day.weekday }})
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="emp in attendanceData" :key="emp.employee.id">
+                                    <td class="employee-name" style="left: 0;">
+                                        {{ emp.employee.name }}
+                                        <span class="badge bg-secondary" v-if="emp.employee.data_source === 'dauoffice'">
+                                            다우오피스
+                                        </span>
+                                    </td>
+                                    <td class="employee-dept" style="left: 120px;">
+                                        {{ emp.employee.department || '-' }}
+                                    </td>
+                                    <td v-for="day in daysInMonth" :key="day.day" 
+                                        :class="{'weekend': day.isWeekend, 'editable-cell': true}"
+                                        @click="editCell(emp.employee, day.day)">
+                                        <span v-html="getCellDisplay(emp, day.day)"></span>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 직원 관리 모달 -->
+        <div class="modal" :class="{'show d-block': showEmployeeModal}" v-if="showEmployeeModal">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">직원 관리</h5>
+                        <button type="button" class="btn-close" @click="showEmployeeModal = false"></button>
+                    </div>
+                    <div class="modal-body">
+                        <button class="btn btn-primary mb-3" @click="showAddEmployeeForm = true">
+                            ➕ 직원 추가
+                        </button>
+                        
+                        <!-- 직원 추가 폼 -->
+                        <div class="card mb-3" v-if="showAddEmployeeForm">
+                            <div class="card-body">
+                                <h6>새 직원 추가</h6>
+                                <div class="mb-2">
+                                    <input type="text" class="form-control" v-model="newEmployee.name" placeholder="성명">
+                                </div>
+                                <div class="mb-2">
+                                    <input type="text" class="form-control" v-model="newEmployee.department" placeholder="부서/팀">
+                                </div>
+                                <button class="btn btn-success btn-sm" @click="addEmployee">저장</button>
+                                <button class="btn btn-secondary btn-sm" @click="showAddEmployeeForm = false">취소</button>
+                            </div>
+                        </div>
+
+                        <!-- 직원 목록 -->
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>성명</th>
+                                    <th>부서/팀</th>
+                                    <th>데이터 소스</th>
+                                    <th>작업</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="emp in employees" :key="emp.id">
+                                    <td>{{ emp.name }}</td>
+                                    <td>{{ emp.department || '-' }}</td>
+                                    <td>
+                                        <span class="badge" :class="emp.data_source === 'dauoffice' ? 'bg-info' : 'bg-secondary'">
+                                            {{ emp.data_source === 'dauoffice' ? '다우오피스' : '수동입력' }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-danger btn-sm" @click="deleteEmployee(emp.id)" 
+                                                v-if="emp.data_source === 'manual'">
+                                            삭제
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 출근 기록 편집 모달 -->
+        <div class="modal" :class="{'show d-block': showEditModal}" v-if="showEditModal">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">출근 기록 입력</h5>
+                        <button type="button" class="btn-close" @click="showEditModal = false"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p><strong>직원:</strong> {{ editingRecord.employeeName }}</p>
+                        <p><strong>날짜:</strong> {{ editingRecord.date }}</p>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">기록 유형</label>
+                            <select class="form-select" v-model="editingRecord.recordType">
+                                <option value="normal">정상 출근</option>
+                                <option value="annual_leave">연차</option>
+                                <option value="half_leave">반차</option>
+                                <option value="substitute_holiday">대체휴무</option>
+                                <option value="business_trip">출장</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3" v-if="editingRecord.recordType === 'normal'">
+                            <label class="form-label">출근 시간</label>
+                            <input type="time" class="form-control" v-model="editingRecord.checkInTime" step="1">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">메모</label>
+                            <input type="text" class="form-control" v-model="editingRecord.note" 
+                                   placeholder="예: 출장-셀락바이오">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @click="showEditModal = false">취소</button>
+                        <button type="button" class="btn btn-primary" @click="saveRecord">저장</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 로딩 오버레이 -->
+        <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center" 
+             style="background: rgba(0,0,0,0.5); z-index: 9999;" v-if="loading">
+            <div class="spinner-border text-light" role="status" style="width: 3rem; height: 3rem;">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
