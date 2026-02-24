@@ -281,7 +281,14 @@ def export_excel():
         cell.alignment = center_alignment
     
     # 직원별 데이터 작성
-    employees = Employee.query.filter_by(is_active=True).all()
+    department_filter = request.args.get('department', '')
+    query = Employee.query.filter_by(is_active=True)
+    if department_filter:
+        query = query.filter_by(department=department_filter)
+    employees = query.order_by(Employee.department, Employee.name).all()
+    
+    # 엑셀 파일명에 부서 반영
+    filename = f"출근기록_{year}.{month:02d}_{department_filter or '전체'}.xlsx"
     
     for emp in employees:
         row_data = [emp.name, emp.department or '']
@@ -321,7 +328,7 @@ def export_excel():
     output.seek(0)
     
     # 파일명
-    filename = f"출근기록_{year}.{month:02d}.xlsx"
+    # filename = f"출근기록_{year}.{month:02d}.xlsx"  # 위에서 이미 설정됨
     
     return send_file(
         output,
