@@ -223,69 +223,16 @@ def sync_attendance():
         return jsonify({'error': '년도와 월을 지정해주세요.'}), 400
     
     try:
-        # 해당 월의 시작일과 종료일
-        start_date = datetime(year, month, 1).date()
-        _, last_day = calendar.monthrange(year, month)
-        end_date = datetime(year, month, last_day).date()
-        
-        # 다우오피스에서 데이터 가져오기
-        records = dauoffice_client.get_attendance_records(
-            start_date.strftime('%Y-%m-%d'),
-            end_date.strftime('%Y-%m-%d')
-        )
-        
-        synced_count = 0
-        
-        for record_data in records:
-            # 다우오피스 사용자 ID로 직원 찾기
-            dauoffice_user_id = record_data.get('user_id')
-            employee = Employee.query.filter_by(dauoffice_user_id=dauoffice_user_id).first()
-            
-            if not employee:
-                continue
-            
-            # 날짜 파싱
-            date_obj = datetime.strptime(record_data['date'], '%Y-%m-%d').date()
-            
-            # 시간 파싱
-            check_in_time = None
-            if record_data.get('check_in_time'):
-                check_in_time = datetime.strptime(record_data['check_in_time'], '%H:%M:%S').time()
-            
-            # 중복 체크
-            existing = AttendanceRecord.query.filter_by(
-                employee_id=employee.id,
-                date=date_obj
-            ).first()
-            
-            if existing:
-                # 다우오피스 데이터로 업데이트 (data_source가 dauoffice인 경우만)
-                if existing.data_source == 'dauoffice':
-                    existing.check_in_time = check_in_time
-                    existing.record_type = record_data.get('record_type', 'normal')
-                    existing.note = record_data.get('note', '')
-                    synced_count += 1
-            else:
-                # 새 레코드 생성
-                record = AttendanceRecord(
-                    employee_id=employee.id,
-                    date=date_obj,
-                    check_in_time=check_in_time,
-                    record_type=record_data.get('record_type', 'normal'),
-                    note=record_data.get('note', ''),
-                    data_source='dauoffice'
-                )
-                db.session.add(record)
-                synced_count += 1
-        
-        db.session.commit()
+        # dauoffice_api.py에 구현된 sync_attendance_from_dauoffice 메서드 사용
+        count = dauoffice_client.sync_attendance_from_dauoffice(year, month)
         
         return jsonify({
-            'message': f'{synced_count}개의 출근 기록이 동기화되었습니다.',
-            'count': synced_count
+            'message': f'{count}개의 출근 기록이 동기화되었습니다.',
+            'count': count
         })
     
     except Exception as e:
+        print(f"근태 동기화 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 
