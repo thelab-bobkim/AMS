@@ -1,134 +1,238 @@
 import requests
+import base64
 from datetime import datetime, timedelta
 from models import db, DauofficeToken
 
+# SSL 경고 억제
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
 class DauofficeAPIClient:
-    """다우오피스 OpenAPI 클라이언트"""
+    """다우오피스 OpenAPI 클라이언트
     
-    def __init__(self, api_key, api_url, server_ip):
-        self.api_key = api_key
+    인증 방식: OAuth2 Client Credentials
+    - POST /public/auth/v1/oauth2/token
+    - Authorization: Basic Base64(clientId:clientSecret)
+    - grant_type=client_credentials
+    - 발급된 Access Token을 Bearer로 사용
+    """
+    
+    TOKEN_ENDPOINT = "/public/auth/v1/oauth2/token"
+    
+    def __init__(self, client_id, client_secret, api_url="https://api.daouoffice.com"):
+        self.client_id = client_id
+        self.client_secret = client_secret
         self.api_url = api_url
-        self.server_ip = server_ip
         self.access_token = None
+        self.token_expires_at = None
+    
+    @property
+    def _basic_auth_header(self):
+        """Basic Auth 헤더 생성: Base64(clientId:clientSecret)"""
+        credentials = f"{self.client_id}:{self.client_secret}"
+        encoded = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+        return f"Basic {encoded}"
     
     def get_access_token(self):
-        """Access Token 발급/조회
-        다우오피스 API Key를 Bearer Token으로 사용
-        """
-        # 다우오피스는 API Key를 직접 Bearer Token으로 사용
-        # DB 토큰 검증 로직은 향후 토큰 갱신 API가 제공될 경우 활용
-        if self.api_key:
-            self.access_token = self.api_key
-            return self.access_token
+        """Access Token 발급/조회 (OAuth2 Client Credentials 방식)
         
-        print("API Key가 설정되지 않았습니다.")
-        return None
+        - DB에 유효한 토큰이 있으면 재사용
+        - 없거나 만료되면 새로 발급
+        """
+        # 1) 메모리 캐시 확인
+        if self.access_token and self.token_expires_at:
+            if datetime.utcnow() < self.token_expires_at:
+                return self.access_token
+        
+        # 2) DB 캐시 확인
+        try:
+            token_record = DauofficeToken.query.order_by(
+                DauofficeToken.created_at.desc()
+            ).first()
+            if token_record and token_record.is_valid():
+                self.access_token = token_record.access_token
+                self.token_expires_at = token_record.expires_at
+                print(f"[DauofficeAPI] DB 캐시 토큰 사용 (만료: {token_record.expires_at})")
+                return self.access_token
+        except Exception as e:
+            print(f"[DauofficeAPI] DB 토큰 조회 오류: {e}")
+        
+        # 3) 새 토큰 발급
+        return self._issue_new_token()
     
-    def _make_request(self, method, endpoint, data=None):
-        """공통 API 요청 메서드"""
-        if not self.access_token:
-            self.get_access_token()
+    def _issue_new_token(self):
+        """다우오피스 OAuth2 토큰 발급"""
+        url = f"{self.api_url}{self.TOKEN_ENDPOINT}"
+        headers = {
+            "Authorization": self._basic_auth_header,
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        data = "grant_type=client_credentials"
+        
+        print(f"[DauofficeAPI] Access Token 발급 요청: {url}")
+        
+        try:
+            response = requests.post(
+                url, data=data, headers=headers,
+                verify=False, timeout=15
+            )
+            print(f"[DauofficeAPI] Token 발급 응답: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                self.access_token = result.get('access_token')
+                expires_in = result.get('expires_in', 86400)  # 기본 24시간
+                self.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in - 300)
+                
+                print(f"[DauofficeAPI] Access Token 발급 성공 (유효: {expires_in}초)")
+                
+                # DB에 저장
+                try:
+                    token_record = DauofficeToken(
+                        access_token=self.access_token,
+                        expires_at=self.token_expires_at
+                    )
+                    db.session.add(token_record)
+                    db.session.commit()
+                except Exception as e:
+                    print(f"[DauofficeAPI] 토큰 DB 저장 오류: {e}")
+                
+                return self.access_token
+            else:
+                error = response.json() if response.content else {}
+                print(f"[DauofficeAPI] Token 발급 실패: {response.status_code} - {error}")
+                return None
+        
+        except requests.exceptions.ConnectionError as e:
+            print(f"[DauofficeAPI] 연결 오류: {e}")
+            return None
+        except Exception as e:
+            print(f"[DauofficeAPI] Token 발급 예외: {e}")
+            return None
+    
+    def _make_request(self, method, endpoint, params=None, json_data=None, retry=True):
+        """공통 API 요청 메서드 (토큰 만료 시 자동 재발급)"""
+        token = self.get_access_token()
+        if not token:
+            print(f"[DauofficeAPI] Access Token이 없습니다.")
+            return None
         
         url = f"{self.api_url}{endpoint}"
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.access_token}"
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
         }
         
         try:
             if method == "GET":
-                response = requests.get(url, headers=headers, verify=False, timeout=10)
+                response = requests.get(
+                    url, headers=headers, params=params,
+                    verify=False, timeout=15
+                )
             elif method == "POST":
-                response = requests.post(url, json=data, headers=headers, verify=False, timeout=10)
+                response = requests.post(
+                    url, headers=headers, json=json_data,
+                    verify=False, timeout=15
+                )
+            else:
+                return None
+            
+            # 401 토큰 만료 → 재발급 후 1회 재시도
+            if response.status_code == 401 and retry:
+                print(f"[DauofficeAPI] 401 응답 → 토큰 재발급 후 재시도")
+                self.access_token = None
+                self.token_expires_at = None
+                self._issue_new_token()
+                return self._make_request(method, endpoint, params, json_data, retry=False)
             
             return response
+        
         except Exception as e:
-            print(f"API 요청 오류: {str(e)}")
+            print(f"[DauofficeAPI] API 요청 오류 ({method} {endpoint}): {e}")
             return None
     
-    def get_attendance_records(self, start_date, end_date, page=0, page_size=50):
-        """근태 정보 조회
-        
-        Args:
-            start_date: 시작일 (YYYY-MM-DD)
-            end_date: 종료일 (YYYY-MM-DD)
-            page: 페이지 번호 (기본값: 0)
-            page_size: 페이지 크기 (기본값: 50)
-        
-        Returns:
-            dict: 근태 기록 딕셔너리 (totalCount, elements 포함)
-        """
-        # 다우오피스 근태 이력 조회 API v2
-        endpoint = f"/public/api/attnd-v2/attnd?startDate={start_date}&endDate={end_date}&page={page}&pageSize={page_size}"
-        
-        response = self._make_request("GET", endpoint)
-        
-        if response and response.status_code == 200:
-            data = response.json()
-            if data.get('code') == '200':
-                return data.get('data', {})
-            else:
-                print(f"근태 정보 조회 실패: {data.get('message')}")
-                return {'totalCount': 0, 'elements': []}
-        else:
-            print(f"근태 정보 조회 실패: {response.status_code if response else 'No response'}")
-            return {'totalCount': 0, 'elements': []}
-    
-    def register_attendance_record(self, user_id, date, check_in_time, record_type='normal', note=''):
-        """근태 기록 등록 (수동 입력 시 다우오피스에도 등록)
-        
-        Args:
-            user_id: 다우오피스 사용자 ID
-            date: 날짜 (YYYY-MM-DD)
-            check_in_time: 출근 시간 (HH:MM:SS)
-            record_type: 기록 타입
-            note: 메모
-        
-        Returns:
-            bool: 성공 여부
-        """
-        endpoint = "/api/v1/attendance/register"
-        
-        data = {
-            "user_id": user_id,
-            "date": date,
-            "check_in_time": check_in_time,
-            "record_type": record_type,
-            "note": note
-        }
-        
-        response = self._make_request("POST", endpoint, data)
-        
-        if response and response.status_code == 200:
-            return True
-        else:
-            print(f"근태 기록 등록 실패: {response.status_code if response else 'No response'}")
-            return False
+    # ==================== 조직 정보 API ====================
     
     def get_organization_info(self):
-        """조직 정보 조회 (직원 목록)
+        """조직도 사용자 목록 조회 (v3)
+        
+        GET /public/api/attnd-v3/organization-chart/user/list
         
         Returns:
             list: 직원 정보 리스트
         """
-        # 다우오피스 조직도 사용자 목록 조회 API v3
         endpoint = "/public/api/attnd-v3/organization-chart/user/list"
-        
         response = self._make_request("GET", endpoint)
         
-        if response and response.status_code == 200:
+        if response is None:
+            print("[DauofficeAPI] 조직 정보 조회: 응답 없음")
+            return []
+        
+        print(f"[DauofficeAPI] 조직 정보 응답: {response.status_code}")
+        
+        if response.status_code == 200:
             data = response.json()
-            if data.get('code') == '200':
-                return data.get('data', [])
+            # 다우오피스 응답 code 필드는 정수 또는 문자열일 수 있음
+            code = str(data.get('code', ''))
+            if code == '200':
+                employees = data.get('data', [])
+                print(f"[DauofficeAPI] 직원 수: {len(employees)}")
+                return employees
             else:
-                print(f"조직 정보 조회 실패: {data.get('message')}")
+                print(f"[DauofficeAPI] 조직 정보 오류: {data.get('message')} / {data.get('messageDetail')}")
                 return []
         else:
-            print(f"조직 정보 조회 실패: {response.status_code if response else 'No response'}")
+            print(f"[DauofficeAPI] 조직 정보 HTTP 오류: {response.status_code} - {response.text[:200]}")
             return []
     
+    # ==================== 근태 정보 API ====================
+    
+    def get_attendance_records(self, start_date, end_date, page=0, page_size=50):
+        """근태 이력 조회 (v2)
+        
+        GET /public/api/attnd-v2/attnd
+        
+        Args:
+            start_date: 시작일 (YYYY-MM-DD)
+            end_date: 종료일 (YYYY-MM-DD, 최대 31일 범위)
+            page: 페이지 번호 (기본값: 0)
+            page_size: 페이지 크기 (기본값: 50)
+        
+        Returns:
+            dict: { totalCount, currentPage, pageSize, totalPages, elements }
+        """
+        endpoint = "/public/api/attnd-v2/attnd"
+        params = {
+            "startDate": start_date,
+            "endDate": end_date,
+            "page": page,
+            "pageSize": page_size
+        }
+        
+        response = self._make_request("GET", endpoint, params=params)
+        
+        if response is None:
+            return {'totalCount': 0, 'elements': [], 'totalPages': 0}
+        
+        print(f"[DauofficeAPI] 근태 조회 응답: {response.status_code} (page={page})")
+        
+        if response.status_code == 200:
+            data = response.json()
+            code = str(data.get('code', ''))
+            if code == '200':
+                return data.get('data', {'totalCount': 0, 'elements': [], 'totalPages': 0})
+            else:
+                print(f"[DauofficeAPI] 근태 조회 오류: {data.get('message')}")
+                return {'totalCount': 0, 'elements': [], 'totalPages': 0}
+        else:
+            print(f"[DauofficeAPI] 근태 조회 HTTP 오류: {response.status_code} - {response.text[:200]}")
+            return {'totalCount': 0, 'elements': [], 'totalPages': 0}
+    
+    # ==================== 동기화 메서드 ====================
+    
     def sync_employees_from_dauoffice(self):
-        """다우오피스에서 직원 정보 동기화
+        """다우오피스 → DB 직원 동기화
         
         Returns:
             int: 동기화된 직원 수
@@ -136,42 +240,51 @@ class DauofficeAPIClient:
         from models import Employee
         
         employees = self.get_organization_info()
+        if not employees:
+            print("[DauofficeAPI] 동기화할 직원 데이터가 없습니다.")
+            return 0
+        
         synced_count = 0
         
         for emp_data in employees:
-            # 다우오피스 로그인 ID로 기존 직원 찾기
             login_id = emp_data.get('loginId')
             if not login_id:
                 continue
             
-            employee = Employee.query.filter_by(dauoffice_user_id=login_id).first()
-            
-            # 부서 정보 추출 (userGroups에서 첫 번째 그룹의 이름)
+            # 부서 정보 (userGroups 첫 번째)
             user_groups = emp_data.get('userGroups', [])
             department = user_groups[0].get('name') if user_groups else '미지정'
+            name = emp_data.get('name', '이름없음')
+            
+            employee = Employee.query.filter_by(dauoffice_user_id=login_id).first()
             
             if not employee:
-                # 새 직원 추가
                 employee = Employee(
-                    name=emp_data.get('name'),
+                    name=name,
                     department=department,
                     data_source='dauoffice',
-                    dauoffice_user_id=login_id
+                    dauoffice_user_id=login_id,
+                    is_active=True
                 )
                 db.session.add(employee)
-                synced_count += 1
+                print(f"[DauofficeAPI] 신규 직원 추가: {name} ({department})")
             else:
-                # 기존 직원 정보 업데이트
-                employee.name = emp_data.get('name')
+                employee.name = name
                 employee.department = department
-                employee.is_active = (emp_data.get('status') == 'ONLINE')
-                synced_count += 1
+                # status: ONLINE/OFFLINE 등 — ONLINE이면 활성
+                status = emp_data.get('status', '')
+                if status:
+                    employee.is_active = (status.upper() == 'ONLINE')
+                print(f"[DauofficeAPI] 직원 업데이트: {name} ({department})")
+            
+            synced_count += 1
         
         db.session.commit()
+        print(f"[DauofficeAPI] 직원 동기화 완료: {synced_count}명")
         return synced_count
     
     def sync_attendance_from_dauoffice(self, year, month):
-        """다우오피스에서 근태 기록 동기화
+        """다우오피스 → DB 근태 기록 동기화
         
         Args:
             year: 년도
@@ -183,42 +296,43 @@ class DauofficeAPIClient:
         from models import Employee, AttendanceRecord
         from calendar import monthrange
         
-        # 해당 월의 시작일과 종료일 계산
         _, last_day = monthrange(year, month)
         start_date = f"{year:04d}-{month:02d}-01"
         end_date = f"{year:04d}-{month:02d}-{last_day:02d}"
+        
+        print(f"[DauofficeAPI] 근태 동기화 시작: {start_date} ~ {end_date}")
         
         synced_count = 0
         page = 0
         page_size = 50
         
         while True:
-            # 근태 데이터 가져오기 (페이지네이션)
             result = self.get_attendance_records(start_date, end_date, page, page_size)
             elements = result.get('elements', [])
+            total_pages = result.get('totalPages', 1)
+            
+            print(f"[DauofficeAPI] 페이지 {page+1}/{total_pages}, 레코드 {len(elements)}개")
             
             if not elements:
                 break
             
             for att_data in elements:
-                # 로그인 ID로 직원 찾기
                 login_id = att_data.get('loginId')
-                employee = Employee.query.filter_by(dauoffice_user_id=login_id).first()
-                
-                if not employee:
-                    # 직원이 DB에 없으면 건너뛴기
+                if not login_id:
                     continue
                 
-                # 출근 날짜
+                employee = Employee.query.filter_by(dauoffice_user_id=login_id).first()
+                if not employee:
+                    continue
+                
                 accrual_date = att_data.get('accrualDate')
                 if not accrual_date:
                     continue
                 
-                # 기존 기록 확인
-                existing_record = AttendanceRecord.query.filter_by(
-                    employee_id=employee.id,
-                    date=datetime.strptime(accrual_date, '%Y-%m-%d').date()
-                ).first()
+                try:
+                    date_obj = datetime.strptime(accrual_date, '%Y-%m-%d').date()
+                except ValueError:
+                    continue
                 
                 # 출근 시간 파싱
                 start_work_time = att_data.get('startWorkTime')
@@ -226,37 +340,35 @@ class DauofficeAPIClient:
                 if start_work_time:
                     try:
                         check_in_time = datetime.strptime(start_work_time, '%H:%M:%S').time()
-                    except:
+                    except ValueError:
                         pass
                 
-                # 기록 타입 결정 (normal, leave 등)
                 record_type = 'normal'
-                # 다우오피스 API에서 휴가/연차 정보를 제공하는 경우 여기서 판단
-                # 현재는 기본값으로 normal 설정
                 
-                if not existing_record:
-                    # 새 기록 추가
+                existing = AttendanceRecord.query.filter_by(
+                    employee_id=employee.id,
+                    date=date_obj
+                ).first()
+                
+                if not existing:
                     new_record = AttendanceRecord(
                         employee_id=employee.id,
-                        date=datetime.strptime(accrual_date, '%Y-%m-%d').date(),
+                        date=date_obj,
                         check_in_time=check_in_time,
                         record_type=record_type,
                         data_source='dauoffice'
                     )
                     db.session.add(new_record)
                     synced_count += 1
-                else:
-                    # 기존 기록 업데이트 (수동 입력된 기록이 아니면)
-                    if existing_record.data_source == 'dauoffice':
-                        existing_record.check_in_time = check_in_time
-                        existing_record.record_type = record_type
-                        synced_count += 1
+                elif existing.data_source == 'dauoffice':
+                    existing.check_in_time = check_in_time
+                    existing.record_type = record_type
+                    synced_count += 1
             
-            # 다음 페이지
             page += 1
-            total_pages = result.get('totalPages', 1)
             if page >= total_pages:
                 break
         
         db.session.commit()
+        print(f"[DauofficeAPI] 근태 동기화 완료: {synced_count}건")
         return synced_count

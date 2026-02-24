@@ -18,14 +18,19 @@ CORS(app)
 # 데이터베이스 초기화
 db.init_app(app)
 
-# 다우오피스 API 클라이언트
+# 다우오피스 API 클라이언트 (OAuth2 Client Credentials)
 dauoffice_client = None
-if app.config['DAUOFFICE_API_KEY']:
+client_id = Config.get_client_id()
+client_secret = Config.get_client_secret()
+if client_id:
     dauoffice_client = DauofficeAPIClient(
-        app.config['DAUOFFICE_API_KEY'],
-        app.config['DAUOFFICE_API_URL'],
-        app.config['DAUOFFICE_SERVER_IP']
+        client_id=client_id,
+        client_secret=client_secret,
+        api_url=app.config.get('DAUOFFICE_API_URL', 'https://api.daouoffice.com')
     )
+    print(f"[App] DauofficeAPIClient 초기화 완료 (client_id: {client_id[:8]}...)")
+else:
+    print("[App] 다우오피스 API 키가 설정되지 않았습니다.")
 
 with app.app_context():
     db.create_all()
