@@ -88,37 +88,45 @@ def delete_employee(employee_id):
 
 @app.route('/api/attendance', methods=['GET'])
 def get_attendance_records():
-    """출근 기록 조회 (월별)"""
+    """출근 기록 조회 (월별) - 부서 필터 지원, N+1 쿼리 개선"""
     year = request.args.get('year', type=int)
     month = request.args.get('month', type=int)
-    
+    department = request.args.get('department', '')
+
     if not year or not month:
         return jsonify({'error': '년도와 월을 지정해주세요.'}), 400
-    
-    # 해당 월의 시작일과 종료일
+
     start_date = datetime(year, month, 1).date()
     _, last_day = calendar.monthrange(year, month)
     end_date = datetime(year, month, last_day).date()
-    
-    # 직원별 출근 기록 조회
-    employees = Employee.query.filter_by(is_active=True).all()
-    result = []
-    
-    for emp in employees:
-        records = AttendanceRecord.query.filter(
-            AttendanceRecord.employee_id == emp.id,
-            AttendanceRecord.date >= start_date,
-            AttendanceRecord.date <= end_date
-        ).all()
-        
-        # 날짜별로 매핑
-        record_dict = {rec.date.day: rec.to_dict() for rec in records}
-        
-        result.append({
-            'employee': emp.to_dict(),
-            'records': record_dict
-        })
-    
+
+    # 1) 직원 목록 (부서 필터 + 정렬)
+    emp_query = Employee.query.filter_by(is_active=True)
+    if department:
+        emp_query = emp_query.filter_by(department=department)
+    employees = emp_query.order_by(Employee.department, Employee.name).all()
+
+    if not employees:
+        return jsonify([])
+
+    # 2) 해당 월 전체 출근기록 한 번에 조회 (N+1 방지)
+    emp_ids = [e.id for e in employees]
+    all_records = AttendanceRecord.query.filter(
+        AttendanceRecord.employee_id.in_(emp_ids),
+        AttendanceRecord.date >= start_date,
+        AttendanceRecord.date <= end_date
+    ).all()
+
+    # 3) {employee_id: {day: record_dict}} 맵핑
+    record_map = {}
+    for rec in all_records:
+        record_map.setdefault(rec.employee_id, {})[rec.date.day] = rec.to_dict()
+
+    # 4) 결과 조합
+    result = [
+        {'employee': emp.to_dict(), 'records': record_map.get(emp.id, {})}
+        for emp in employees
+    ]
     return jsonify(result)
 
 @app.route('/api/attendance', methods=['POST'])

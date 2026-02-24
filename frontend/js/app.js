@@ -98,9 +98,9 @@ createApp({
             this.loading = true;
             this.calculateDaysInMonth();
             try {
-                const res = await axios.get(`${API}/attendance`, {
-                    params: { year: this.selectedYear, month: this.selectedMonth }
-                });
+                const params = { year: this.selectedYear, month: this.selectedMonth };
+                if (this.selectedDept) params.department = this.selectedDept;
+                const res = await axios.get(`${API}/attendance`, { params });
                 this.attendanceData = res.data;
             } catch (e) {
                 console.error('출근 기록 로드 실패:', e);
@@ -121,8 +121,8 @@ createApp({
         },
 
         onDeptChange() {
-            // 부서 변경 시 이름 검색 초기화
             this.searchName = '';
+            this.loadAttendance();  // 부서 변경 시 API 재호출
         },
 
         onSearchChange() {

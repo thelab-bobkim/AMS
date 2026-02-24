@@ -282,16 +282,20 @@ class DauofficeAPIClient:
                     department=department,
                     data_source='dauoffice',
                     dauoffice_user_id=login_id,
-                    is_active=True
+                    is_active=True  # 신규 직원은 항상 활성
                 )
                 db.session.add(employee)
                 print(f"[DauofficeAPI] 신규 직원 추가: {name} ({department})")
             else:
                 employee.name = name
                 employee.department = department
-                status = emp_data.get('status', '')
-                if status:
-                    employee.is_active = (status.upper() == 'ONLINE')
+                # ⚠️ status(ONLINE/OFFLINE)는 접속상태이지 재직상태가 아님 → is_active 변경 안 함
+                # expiredDate가 있을 경우에만 퇴직 처리 가능
+                expired = emp_data.get('expiredDate', '')
+                if expired and expired < datetime.utcnow().strftime('%Y-%m-%d'):
+                    employee.is_active = False
+                else:
+                    employee.is_active = True  # 재직 중으로 유지
                 print(f"[DauofficeAPI] 직원 업데이트: {name} ({department})")
             
             synced_count += 1
