@@ -248,13 +248,31 @@ class DauofficeAPIClient:
         
         for emp_data in employees:
             login_id = emp_data.get('loginId')
-            if not login_id:
+            
+            # loginId가 없거나 비어있으면 부서 노드(진짜 직원 아님)
+            if not login_id or not login_id.strip():
+                continue
+            
+            # employeeNumber가 없으면 부서/그룹 노드일 가능성이 높음 — 건너뛴기
+            if not emp_data.get('employeeNumber'):
                 continue
             
             # 부서 정보 (userGroups 첫 번째)
             user_groups = emp_data.get('userGroups', [])
             department = user_groups[0].get('name') if user_groups else '미지정'
             name = emp_data.get('name', '이름없음')
+            
+            # 수동 입력된 직원 중 동일 이름이 있으면 dauoffice_user_id 업데이트
+            manual_emp = Employee.query.filter_by(
+                name=name, data_source='manual'
+            ).first()
+            if manual_emp and not manual_emp.dauoffice_user_id:
+                manual_emp.dauoffice_user_id = login_id
+                manual_emp.department = department
+                manual_emp.data_source = 'dauoffice'
+                synced_count += 1
+                print(f"[DauofficeAPI] 수동입력 직원 연결: {name} ({department})")
+                continue
             
             employee = Employee.query.filter_by(dauoffice_user_id=login_id).first()
             
@@ -271,7 +289,6 @@ class DauofficeAPIClient:
             else:
                 employee.name = name
                 employee.department = department
-                # status: ONLINE/OFFLINE 등 — ONLINE이면 활성
                 status = emp_data.get('status', '')
                 if status:
                     employee.is_active = (status.upper() == 'ONLINE')
@@ -310,8 +327,9 @@ class DauofficeAPIClient:
             result = self.get_attendance_records(start_date, end_date, page, page_size)
             elements = result.get('elements', [])
             total_pages = result.get('totalPages', 1)
+            total_count = result.get('totalCount', 0)
             
-            print(f"[DauofficeAPI] 페이지 {page+1}/{total_pages}, 레코드 {len(elements)}개")
+            print(f"[DauofficeAPI] 근태 페이지 {page+1}/{total_pages} ({len(elements)}건 / 전체 {total_count}건)")
             
             if not elements:
                 break
