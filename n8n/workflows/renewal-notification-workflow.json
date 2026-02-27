@@ -1,0 +1,170 @@
+{
+  "name": "계약갱신 자동알림 시스템 (AMS v2.0)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "매일 오전 8시 실행",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    c.contract_id,\n    c.contract_number,\n    c.customer_name,\n    c.service_type,\n    c.start_date,\n    c.end_date,\n    c.monthly_amount,\n    c.monthly_amount * 12 AS annual_amount,\n    c.sales_rep_name,\n    c.sales_rep_email,\n    COALESCE(c.renewal_probability, 70.0) AS renewal_probability,\n    (c.end_date - CURRENT_DATE) AS days_remaining\nFROM contracts c\nWHERE \n    c.status = 'active'\n    AND c.end_date >= CURRENT_DATE\n    AND c.end_date <= CURRENT_DATE + INTERVAL '90 days'\nORDER BY c.end_date ASC;"
+      },
+      "id": "node-pg-query",
+      "name": "계약 데이터 조회",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL-Mainteance DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n    // days_remaining은 PostgreSQL interval 타입 → 숫자로 변환\n    let daysRaw = item.json.days_remaining;\n    let daysNum = 0;\n    \n    if (typeof daysRaw === 'number') {\n        daysNum = daysRaw;\n    } else if (typeof daysRaw === 'string') {\n        // \"90 days\", \"7 days\" 등의 형식 처리\n        const match = String(daysRaw).match(/(\\d+)/);\n        daysNum = match ? parseInt(match[1]) : 0;\n    } else if (daysRaw && typeof daysRaw === 'object') {\n        // PostgreSQL interval object\n        daysNum = parseInt(daysRaw.days || 0);\n    }\n    \n    let alertStage = '';\n    let urgencyLevel = '';\n    let priority = 0;\n    \n    if (daysNum >= 85 && daysNum <= 90) {\n        alertStage = 'D-90';\n        urgencyLevel = '정보';\n        priority = 1;\n    } else if (daysNum >= 55 && daysNum <= 65) {\n        alertStage = 'D-60';\n        urgencyLevel = '주의';\n        priority = 2;\n    } else if (daysNum >= 40 && daysNum <= 50) {\n        alertStage = 'D-45';\n        urgencyLevel = '중요';\n        priority = 3;\n    } else if (daysNum >= 25 && daysNum <= 35) {\n        alertStage = 'D-30';\n        urgencyLevel = '긴급';\n        priority = 4;\n    } else if (daysNum >= 10 && daysNum <= 16) {\n        alertStage = 'D-14';\n        urgencyLevel = '매우긴급';\n        priority = 5;\n    } else if (daysNum >= 5 && daysNum <= 9) {\n        alertStage = 'D-7';\n        urgencyLevel = '최종경고';\n        priority = 6;\n    } else if (daysNum >= 0 && daysNum <= 4) {\n        alertStage = 'D-0';\n        urgencyLevel = '위기';\n        priority = 7;\n    }\n    \n    // 알림 단계가 없으면 건너뜀 (중간 날짜는 알림 불필요)\n    if (!alertStage) continue;\n    \n    const endDate = new Date(item.json.end_date);\n    const formattedEnd = endDate.toLocaleDateString('ko-KR', {year:'numeric',month:'long',day:'numeric'});\n    \n    results.push({\n        json: {\n            ...item.json,\n            days_remaining: daysNum,\n            alert_stage: alertStage,\n            urgency_level: urgencyLevel,\n            priority: priority,\n            notification_date: new Date().toISOString(),\n            formatted_end_date: formattedEnd,\n            formatted_amount: parseInt(item.json.monthly_amount || 0).toLocaleString('ko-KR'),\n            // 이메일 폴백: email 없으면 CC 담당자에게 알림\n            effective_email: item.json.sales_rep_email || 'htkim@dsti.co.kr'\n        }\n    });\n}\n\nreturn results;"
+      },
+      "id": "node-classify",
+      "name": "알림 단계 분류",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        750,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.item.json;\n\nconst salesRepName = data.sales_rep_name || '담당자';\nconst customerName = data.customer_name || '고객사';\nconst contractNum = data.contract_number || '';\nconst serviceType = data.service_type || '';\nconst formattedEnd = data.formatted_end_date || data.end_date || '';\nconst formattedAmt = data.formatted_amount || '0';\nconst annualAmt = parseInt(data.annual_amount || 0).toLocaleString('ko-KR');\nconst renewalProb = data.renewal_probability || 70;\n\nconst templates = {\n    'D-90': {\n        subject: `📋 [3개월 전 알림] ${customerName} 계약 갱신 준비`,\n        email_body: `안녕하세요, ${salesRepName}님\\n\\n고객사 \"${customerName}\"의 유지보수 계약이 3개월 후 만료됩니다.\\n\\n📊 계약 정보\\n- 계약번호: ${contractNum}\\n- 서비스: ${serviceType}\\n- 만료일: ${formattedEnd}\\n- 월 금액: ${formattedAmt}원\\n- AI 갱신 예측: ${renewalProb}%\\n\\n✅ 다음 액션\\n1. 고객 만족도 점검\\n2. 갱신 의향 사전 파악\\n3. 개선 사항 취합\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[유지보수알림] ${customerName} 계약 3개월 후(${formattedEnd}) 만료. 갱신 준비 시작해주세요.`,\n        slack_message: `🔔 *계약 갱신 준비 (D-90)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}\\n*만료일*: ${formattedEnd}\\n*갱신확률*: ${renewalProb}%`\n    },\n    'D-60': {\n        subject: `⚠️ [2개월 전 알림] ${customerName} 계약 고객 컨택 필요`,\n        email_body: `안녕하세요, ${salesRepName}님\\n\\n고객사 \"${customerName}\"의 계약 만료가 2개월 앞으로 다가왔습니다.\\n\\n📊 계약 정보\\n- 계약번호: ${contractNum}\\n- 만료일: ${formattedEnd} (D-60)\\n- 연간 금액: ${annualAmt}원\\n\\n🎯 즉시 액션 필요\\n1. 고객사 담당자 미팅 일정 잡기\\n2. 서비스 이용 현황 분석\\n3. 갱신 제안서 준비 시작\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[긴급] ${customerName} 계약 2개월 남음(${formattedEnd}). 고객 미팅 일정을 잡아주세요.`,\n        slack_message: `⚠️ *계약 갱신 액션 필요 (D-60)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}\\n*만료일*: ${formattedEnd}`\n    },\n    'D-45': {\n        subject: `🚨 [45일 전] ${customerName} 견적 제안 단계`,\n        email_body: `${salesRepName}님께,\\n\\n\"${customerName}\" 계약 만료까지 45일 남았습니다.\\n\\n📊 현황\\n- 계약번호: ${contractNum}\\n- 만료일: ${formattedEnd}\\n- 현재 금액: ${formattedAmt}원/월\\n\\n💼 이번 주 필수 액션\\n1. ✅ 갱신 견적서 발송\\n2. ✅ 가격 협상 준비\\n3. ✅ 추가 서비스 제안\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[계약갱신] ${customerName} 45일 남음! 견적 제안 단계입니다.`,\n        slack_message: `🚨 *계약 갱신 견적 단계 (D-45)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}`\n    },\n    'D-30': {\n        subject: `🔴 [1개월 전] ${customerName} 계약서 준비 시작`,\n        email_body: `${salesRepName}님,\\n\\n\"${customerName}\" 계약 만료 1개월 전입니다. 긴급 조치가 필요합니다.\\n\\n📊 계약 정보\\n- 계약번호: ${contractNum}\\n- 만료일: ${formattedEnd}\\n- 예상 연간 손실: ${annualAmt}원\\n\\n🔥 즉시 처리 항목\\n1. 계약서 초안 작성\\n2. 가격 확정 및 품의 요청\\n3. 고객사 계약 검토 요청\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[D-30 긴급] ${customerName} 계약 1개월 남음! 계약서 준비를 시작해주세요.`,\n        slack_message: `🔴 *계약 갱신 긴급 (D-30)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}\\n*만료일*: ${formattedEnd}\\n*연간금액*: ${annualAmt}원`\n    },\n    'D-14': {\n        subject: `🆘 [2주 전] ${customerName} 계약 만료 임박!`,\n        email_body: `${salesRepName}님,\\n\\n\"${customerName}\" 계약 만료까지 2주 밖에 남지 않았습니다!\\n\\n⚠️ 계약 정보\\n- 계약번호: ${contractNum}\\n- 만료일: ${formattedEnd}\\n- 리스크 금액: ${annualAmt}원\\n\\n🚨 완료해야 할 사항\\n1. 계약서 서명 완료\\n2. 법무 검토 완료\\n3. 청구서 준비\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[D-14 위급] ${customerName} 계약 2주 남음! 계약서 서명을 서둘러주세요.`,\n        slack_message: `🆘 *계약 만료 임박 (D-14)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}\\n*만료일*: ${formattedEnd}`\n    },\n    'D-7': {\n        subject: `🚨🚨 [최후통보 D-7] ${customerName} 계약 만료 7일!`,\n        email_body: `${salesRepName}님,\\n\\n⚠️ 긴급! \"${customerName}\" 계약이 7일 후 만료됩니다!\\n\\n계약번호: ${contractNum}\\n만료일: ${formattedEnd}\\n손실 예상금액: ${annualAmt}원\\n\\n즉시 처리:\\n1. 임원 보고\\n2. 긴급 미팅 요청\\n3. 특별 조건 검토\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[최후통보] ${customerName} 계약 7일 남음! 즉시 조치 바랍니다.`,\n        slack_message: `🚨🚨 *최후통보 (D-7)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}\\n*만료일*: ${formattedEnd}\\n⚡ 즉시 임원 보고 요망`\n    },\n    'D-0': {\n        subject: `💀 [만료] ${customerName} 계약이 오늘 만료됩니다`,\n        email_body: `${salesRepName}님,\\n\\n\"${customerName}\"의 계약이 오늘(${formattedEnd}) 만료됩니다.\\n\\n계약번호: ${contractNum}\\n확정 연간 손실: ${annualAmt}원\\n\\n지금 즉시 고객사에 연락하여 상황을 파악하시기 바랍니다.\\n\\n본 메일은 유지보수 알림 시스템(AMS)에서 자동 발송되었습니다.`,\n        sms_body: `[계약만료] ${customerName} 계약 오늘 만료! 즉시 연락바랍니다.`,\n        slack_message: `💀 *계약 만료 (D-0)*\\n*고객사*: ${customerName}\\n*담당자*: ${salesRepName}\\n*만료일*: ${formattedEnd} (오늘)`\n    }\n};\n\nconst stage = data.alert_stage;\nconst template = templates[stage] || templates['D-0'];\n\nreturn {\n    json: {\n        ...data,\n        email_subject: template.subject,\n        email_body: template.email_body,\n        sms_body: template.sms_body,\n        slack_message: template.slack_message\n    }\n};"
+      },
+      "id": "node-message",
+      "name": "메시지 템플릿 생성",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.sales_rep_email || 'htkim@dsti.co.kr' }}",
+        "subject": "={{ $json.email_subject }}",
+        "message": "={{ $json.email_body }}",
+        "options": {
+          "ccList": "htkim@dsti.co.kr"
+        }
+      },
+      "id": "node-email",
+      "name": "이메일 발송",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO notification_history (\n    contract_id,\n    contract_number,\n    customer_name,\n    sales_rep_name,\n    sales_rep_email,\n    alert_stage,\n    notification_date,\n    email_sent\n) VALUES (\n    '{{ $json.contract_id }}',\n    '{{ $json.contract_number }}',\n    '{{ $json.customer_name }}',\n    '{{ $json.sales_rep_name }}',\n    '{{ $json.sales_rep_email }}',\n    '{{ $json.alert_stage }}',\n    NOW(),\n    true\n) ON CONFLICT DO NOTHING;"
+      },
+      "id": "node-history",
+      "name": "알림 이력 기록",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL-Mainteance DB"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "매일 오전 8시 실행": {
+      "main": [
+        [
+          {
+            "node": "계약 데이터 조회",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "계약 데이터 조회": {
+      "main": [
+        [
+          {
+            "node": "알림 단계 분류",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "알림 단계 분류": {
+      "main": [
+        [
+          {
+            "node": "메시지 템플릿 생성",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "메시지 템플릿 생성": {
+      "main": [
+        [
+          {
+            "node": "이메일 발송",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "이메일 발송": {
+      "main": [
+        [
+          {
+            "node": "알림 이력 기록",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
