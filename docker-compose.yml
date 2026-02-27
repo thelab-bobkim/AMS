@@ -6,6 +6,7 @@ services:
       - "5000:5000"
     volumes:
       - ./data:/app/data
+      - ./backend/instance:/app/instance
     env_file:
       - .env
     environment:

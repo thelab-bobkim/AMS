@@ -119,15 +119,24 @@ def get_attendance_records():
 
     # 3) {employee_id: {day: record_dict}} 맵핑
     record_map = {}
-    for rec in all_records:
-        record_map.setdefault(rec.employee_id, {})[rec.date.day] = rec.to_dict()
-
-    # 4) 결과 조합
-    result = [
-        {'employee': emp.to_dict(), 'records': record_map.get(emp.id, {})}
-        for emp in employees
-    ]
-    return jsonify(result)
+    for rec in attendance_records:
+        day_key = str(rec.date.day)
+        rd = rec.to_dict()
+        record_map.setdefault(rec.employee_id, {})[day_key] = {
+            'check_in': rd.get('check_in_time', rd.get('check_in', '')),
+            'type': rd.get('record_type', 'normal'),
+            'note': rd.get('note', ''),
+            'source': rd.get('data_source', 'manual')
+        }
+    result = []
+    for emp in employees:
+        result.append({
+            'id': emp.id,
+            'name': emp.name,
+            'department': emp.department or '',
+            'days': record_map.get(emp.id, {})
+        })
+    return jsonify({'code': 200, 'data': result, 'year': year, 'month': month})
 
 @app.route('/api/attendance', methods=['POST'])
 def create_attendance_record():
@@ -355,6 +364,204 @@ def health_check():
         'status': 'ok',
         'dauoffice_api_configured': dauoffice_client is not None
     })
+
+
+
+
+
+# ==================== SenseLink 안면인식 연동 ====================
+
+import os as _os
+
+import requests as _req
+
+
+
+SENSELINK_RELAY_URL = _os.environ.get('SENSELINK_RELAY_URL', 'http://175.198.93.89:8765')
+
+
+
+@app.route('/api/senselink/sync', methods=['POST'])
+
+def senselink_sync():
+
+    """SenseLink 안면인식 데이터 동기화 (push/pull 겸용)"""
+
+    data = request.json or {}
+
+    year  = data.get('year',  datetime.now().year)
+
+    month = data.get('month', datetime.now().month)
+
+    records = data.get('records', [])
+
+
+
+    # records가 없으면 relay_server에서 pull 시도
+
+    if not records:
+
+        try:
+
+            r = _req.post(f"{SENSELINK_RELAY_URL}/sync",
+
+                          json={"year": year, "month": month}, timeout=30)
+
+            if r.status_code == 200:
+
+                records = r.json().get('records', [])
+
+        except Exception as e:
+
+            return jsonify({'code': 200, 'message': f'릴레이 연결 실패: {e}',
+
+                            'synced': 0, 'year': year, 'month': month})
+
+
+
+    synced, errors = 0, []
+
+    for rec in records:
+
+        try:
+
+            emp_name = rec.get('name') or rec.get('employee_name', '')
+
+            emp = Employee.query.filter_by(name=emp_name, is_active=True).first()
+
+            if not emp:
+
+                continue
+
+            date_str = rec.get('date') or rec.get('work_date', '')
+
+            if not date_str:
+
+                continue
+
+            work_date = datetime.strptime(date_str[:10], '%Y-%m-%d').date()
+
+            ci_str = rec.get('check_in') or rec.get('check_in_time', '') or ''
+
+            ci_time = None
+
+            if ci_str:
+
+                ci = ci_str.strip()
+
+                try:    ci_time = datetime.strptime(ci[:8], '%H:%M:%S').time()
+
+                except:
+
+                    try: ci_time = datetime.strptime(ci[:5], '%H:%M').time()
+
+                    except: pass
+
+            rtype = rec.get('type') or rec.get('record_type', 'normal')
+
+            note  = rec.get('note', '')
+
+            existing = AttendanceRecord.query.filter_by(
+
+                employee_id=emp.id, date=work_date).first()
+
+            if existing:
+
+                existing.check_in_time = ci_time
+
+                existing.record_type   = rtype
+
+                existing.note          = note
+
+                existing.data_source   = 'senselink'
+
+            else:
+
+                db.session.add(AttendanceRecord(
+
+                    employee_id=emp.id, date=work_date,
+
+                    check_in_time=ci_time, record_type=rtype,
+
+                    note=note, data_source='senselink'))
+
+            synced += 1
+
+        except Exception as e:
+
+            errors.append(str(e))
+
+    db.session.commit()
+
+    return jsonify({'code': 200, 'message': f'{synced}건 동기화 완료',
+
+                    'synced': synced, 'errors': errors[:5],
+
+                    'year': year, 'month': month})
+
+
+
+
+
+@app.route('/api/senselink/status', methods=['GET'])
+
+def senselink_status():
+
+    """SenseLink 연동 상태"""
+
+    total = AttendanceRecord.query.filter_by(data_source='senselink').count()
+
+    return jsonify({'code': 200, 'relay_url': SENSELINK_RELAY_URL,
+
+                    'total_senselink_records': total})
+
+
+
+
+
+@app.route('/api/senselink/preview', methods=['GET'])
+
+def senselink_preview():
+
+    """SenseLink 최근 데이터 미리보기"""
+
+    year  = request.args.get('year',  datetime.now().year,  type=int)
+
+    month = request.args.get('month', datetime.now().month, type=int)
+
+    recs  = AttendanceRecord.query.filter(
+
+        AttendanceRecord.data_source == 'senselink',
+
+        db.extract('year',  AttendanceRecord.date) == year,
+
+        db.extract('month', AttendanceRecord.date) == month
+
+    ).limit(20).all()
+
+    return jsonify({'code': 200, 'count': len(recs),
+
+                    'records': [r.to_dict() for r in recs]})
+
+
+
+
+
+# ==================== 다우오피스 라우트 별칭 (프론트엔드 /api/daou/ 호환) ====================
+
+@app.route('/api/daou/sync/employees', methods=['POST'])
+
+def daou_sync_employees_alias():
+
+    return sync_employees()
+
+
+
+@app.route('/api/daou/sync/attendance', methods=['POST'])
+
+def daou_sync_attendance_alias():
+
+    return sync_attendance()
 
 
 if __name__ == '__main__':

@@ -1,58 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Database
+backend/instance/
 *.db
-*.sqlite
 *.sqlite3
-
-# Environment variables
+*.sqlite
+*.pyc
+__pycache__/
 .env
-.env.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
 *.log
-nohup.out
-
-# Docker
-.dockerignore
-
-# Backup files
-*.bak
-*.backup
-
-# Data directory
-data/
+*.bak*

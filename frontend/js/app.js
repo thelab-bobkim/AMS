@@ -44,7 +44,7 @@ createApp({
         departments() {
             const map = {};
             for (const emp of this.attendanceData) {
-                const dept = emp.employee.department || '미지정';
+                const dept = emp.department || '미지정';
                 map[dept] = (map[dept] || 0) + 1;
             }
             return Object.entries(map)
@@ -60,11 +60,11 @@ createApp({
         filteredData() {
             let data = this.attendanceData;
             if (this.selectedDept) {
-                data = data.filter(e => (e.employee.department || '미지정') === this.selectedDept);
+                data = data.filter(e => (e.department || '미지정') === this.selectedDept);
             }
             if (this.searchName.trim()) {
                 const q = this.searchName.trim();
-                data = data.filter(e => e.employee.name.includes(q));
+                data = data.filter(e => (e.name || '').toLowerCase().includes(q.toLowerCase()));
             }
             return data;
         },
@@ -101,7 +101,7 @@ createApp({
                 const params = { year: this.selectedYear, month: this.selectedMonth };
                 if (this.selectedDept) params.department = this.selectedDept;
                 const res = await axios.get(`${API}/attendance`, { params });
-                this.attendanceData = res.data;
+                this.attendanceData = Array.isArray(res.data) ? res.data : (res.data.data || []);
             } catch (e) {
                 console.error('출근 기록 로드 실패:', e);
                 alert('출근 기록을 불러오는데 실패했습니다.');
@@ -131,17 +131,17 @@ createApp({
         },
 
         getCellDisplay(empData, day) {
-            const r = empData.records[day];
+            const r = (empData.days || empData.records || {})[String(day)];
             if (!r) return '';
-            switch (r.record_type) {
+            const rtype=r.type||r.record_type; switch (rtype) {
                 case 'annual_leave':    return '<span class="annual-leave">연 차</span>';
                 case 'half_leave':      return '<span class="half-leave">반 차</span>';
                 case 'substitute_holiday': return '<span class="substitute">대체휴무</span>';
                 case 'business_trip':   return `<span class="business-trip">출장${r.note ? '-'+r.note : ''}</span>`;
                 case 'absent':          return '<span style="color:#6c757d">결 근</span>';
                 default:
-                    if (r.check_in_time) {
-                        const t = r.check_in_time.substring(0, 5); // HH:MM
+                    const cin = r.check_in || r.check_in_time; if (cin) {
+                        const t = cin.substring(0, 5);
                         return r.note ? `${t}<br><small style="color:#888">${r.note}</small>` : t;
                     }
                     return '';
@@ -150,16 +150,16 @@ createApp({
 
         editCell(employee, day) {
             const dateStr = `${this.selectedYear}-${String(this.selectedMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-            const empData = this.attendanceData.find(e => e.employee.id === employee.id);
-            const rec = empData ? empData.records[day] : null;
+            const empData = this.attendanceData.find(e => e.id === employee.id);
+            const rec = empData ? (empData.days || empData.records || {})[String(day)] : null;
             this.editingRecord = {
                 recordId: rec ? rec.id : null,
                 employeeId: employee.id,
                 employeeName: employee.name,
                 date: dateStr,
                 day,
-                recordType: rec ? rec.record_type : 'normal',
-                checkInTime: rec && rec.check_in_time ? rec.check_in_time.substring(0, 5) : '',
+                recordType: rec ? (rec.type || rec.record_type || 'normal') : 'normal',
+                checkInTime: (rec && (rec.check_in || rec.check_in_time)) ? (rec.check_in || rec.check_in_time).substring(0, 5) : '',
                 note: rec ? (rec.note || '') : ''
             };
             this.showEditModal = true;
@@ -238,10 +238,10 @@ createApp({
         async syncFromDauoffice() {
             if (!confirm('다우오피스에서 직원 정보와 출근 기록을 동기화하시겠습니까?')) return;
             this.globalLoading = true;
-            this.loadingMessage = '다우오피스 동기화 중...';
+            this.loadingMessage = '통합 동기화 중...';
             try {
-                const empRes = await axios.post(`${API}/dauoffice/sync-employees`);
-                const attRes = await axios.post(`${API}/dauoffice/sync-attendance`, {
+                const empRes = await axios.post(`${API}/daou/sync/employees`);
+                const attRes = await axios.post(`${API}/daou/sync/attendance`, {
                     year: this.selectedYear, month: this.selectedMonth
                 });
                 await this.loadEmployees();
