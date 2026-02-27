@@ -24,7 +24,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT \n    c.contract_id,\n    c.contract_number,\n    c.customer_name,\n    c.service_type,\n    c.start_date,\n    c.end_date,\n    c.monthly_amount,\n    c.monthly_amount * 12 AS annual_amount,\n    c.sales_rep_name,\n    c.sales_rep_email,\n    COALESCE(c.renewal_probability, 70.0) AS renewal_probability,\n    (c.end_date - CURRENT_DATE) AS days_remaining\nFROM contracts c\nWHERE \n    c.status = 'active'\n    AND c.end_date >= CURRENT_DATE\n    AND c.end_date <= CURRENT_DATE + INTERVAL '90 days'\nORDER BY c.end_date ASC;"
+        "query": "WITH email_map AS (\n  SELECT * FROM (VALUES\n    ('김규헌', 'ghkim1@dsti.co.kr'),\n    ('김용태', 'ytkim@dsti.co.kr'),\n    ('김윤식', 'karisma5882@naver.com'),\n    ('김재천', 'jckim@dsti.co.kr'),\n    ('김준서', 'jskim@dsti.co.kr'),\n    ('김형태', 'hjyoo@dsti.co.kr'),\n    ('박민식', 'hushms@dsti.co.kr'),\n    ('박상민', 'smpark@dsti.co.kr'),\n    ('박용석', 'hj.lee@dsti.co.kr'),\n    ('박정재', 'pjj@dsti.co.kr'),\n    ('박희열', 'hypark@dsti.co.kr'),\n    ('손지원', 'jws@dsti.co.kr'),\n    ('오팔석', 'palseokoh@dsti.co.kr'),\n    ('윤윤원', 'ywyoun@dsti.co.kr'),\n    ('이용건', 'yklee@dsti.co.kr'),\n    ('이종갑', 'cklee@dsti.co.kr'),\n    ('임규동', 'gdlim@dsti.co.kr'),\n    ('임규빈', 'gblim@dsti.co.kr'),\n    ('임종만', 'jmlim@dsti.co.kr'),\n    ('장창훈', 'chjang@dsti.co.kr'),\n    ('정석우', 'swjeong@dsti.co.kr'),\n    ('최종민', 'jmchoi@dsti.co.kr')\n  ) AS t(rep_name, rep_email)\n)\nSELECT\n    c.contract_id,\n    c.contract_number,\n    c.customer_name,\n    c.service_type,\n    c.end_date,\n    c.monthly_amount,\n    c.monthly_amount * 12 AS annual_amount,\n    c.sales_rep_name,\n    COALESCE(em.rep_email, c.sales_rep_email, 'htkim@dsti.co.kr') AS sales_rep_email,\n    c.sales_rep_phone,\n    c.customer_email,\n    COALESCE(c.renewal_probability, 70.0) AS renewal_probability,\n    (c.end_date - CURRENT_DATE)::INT AS days_remaining\nFROM contracts c\nLEFT JOIN email_map em ON em.rep_name = c.sales_rep_name\nWHERE c.status = 'active'\n  AND c.end_date >= CURRENT_DATE\n  AND c.end_date <= CURRENT_DATE + INTERVAL '90 days'\nORDER BY c.end_date ASC"
       },
       "id": "node-pg-query",
       "name": "계약 데이터 조회",
@@ -69,12 +69,12 @@
     },
     {
       "parameters": {
-        "sendTo": "={{ $json.sales_rep_email || 'htkim@dsti.co.kr' }}",
         "subject": "={{ $json.email_subject }}",
         "message": "={{ $json.email_body }}",
         "options": {
           "ccList": "htkim@dsti.co.kr"
-        }
+        },
+        "toEmail": "={{ $json.sales_rep_email }}"
       },
       "id": "node-email",
       "name": "이메일 발송",
@@ -88,7 +88,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO notification_history (\n    contract_id,\n    contract_number,\n    customer_name,\n    sales_rep_name,\n    sales_rep_email,\n    alert_stage,\n    notification_date,\n    email_sent\n) VALUES (\n    '{{ $json.contract_id }}',\n    '{{ $json.contract_number }}',\n    '{{ $json.customer_name }}',\n    '{{ $json.sales_rep_name }}',\n    '{{ $json.sales_rep_email }}',\n    '{{ $json.alert_stage }}',\n    NOW(),\n    true\n) ON CONFLICT DO NOTHING;"
+        "query": "WITH email_map AS (\n  SELECT * FROM (VALUES\n    ('김규헌', 'ghkim1@dsti.co.kr'),\n    ('김용태', 'ytkim@dsti.co.kr'),\n    ('김윤식', 'karisma5882@naver.com'),\n    ('김재천', 'jckim@dsti.co.kr'),\n    ('김준서', 'jskim@dsti.co.kr'),\n    ('김형태', 'hjyoo@dsti.co.kr'),\n    ('박민식', 'hushms@dsti.co.kr'),\n    ('박상민', 'smpark@dsti.co.kr'),\n    ('박용석', 'hj.lee@dsti.co.kr'),\n    ('박정재', 'pjj@dsti.co.kr'),\n    ('박희열', 'hypark@dsti.co.kr'),\n    ('손지원', 'jws@dsti.co.kr'),\n    ('오팔석', 'palseokoh@dsti.co.kr'),\n    ('윤윤원', 'ywyoun@dsti.co.kr'),\n    ('이용건', 'yklee@dsti.co.kr'),\n    ('이종갑', 'cklee@dsti.co.kr'),\n    ('임규동', 'gdlim@dsti.co.kr'),\n    ('임규빈', 'gblim@dsti.co.kr'),\n    ('임종만', 'jmlim@dsti.co.kr'),\n    ('장창훈', 'chjang@dsti.co.kr'),\n    ('정석우', 'swjeong@dsti.co.kr'),\n    ('최종민', 'jmchoi@dsti.co.kr')\n  ) AS t(rep_name, rep_email)\n)\nSELECT\n    c.contract_id,\n    c.contract_number,\n    c.customer_name,\n    c.service_type,\n    c.end_date,\n    c.monthly_amount,\n    c.monthly_amount * 12 AS annual_amount,\n    c.sales_rep_name,\n    COALESCE(em.rep_email, c.sales_rep_email, 'htkim@dsti.co.kr') AS sales_rep_email,\n    c.sales_rep_phone,\n    c.customer_email,\n    COALESCE(c.renewal_probability, 70.0) AS renewal_probability,\n    (c.end_date - CURRENT_DATE)::INT AS days_remaining\nFROM contracts c\nLEFT JOIN email_map em ON em.rep_name = c.sales_rep_name\nWHERE c.status = 'active'\n  AND c.end_date >= CURRENT_DATE\n  AND c.end_date <= CURRENT_DATE + INTERVAL '90 days'\nORDER BY c.end_date ASC"
       },
       "id": "node-history",
       "name": "알림 이력 기록",
