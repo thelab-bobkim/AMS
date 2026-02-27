@@ -74,7 +74,7 @@ DEPT_MAP = {
     'jsahn': 'Back-up팀',
     'jschoi': '인프라기술지원 1팀',
     'jskim': 'Cohesity사업부',
-    'jtkwon': 'CS 1팀',
+    'jtkwon': '자회사',
     'jukim': 'Back-up팀',
     'jwchoi': 'CS 2팀',
     'jwlee': 'CS 2팀',
