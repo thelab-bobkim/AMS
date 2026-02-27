@@ -129,7 +129,8 @@ def get_attendance_records():
             'check_in': cin,
             'type':     (rec.record_type  or 'normal'),
             'note':     (rec.note         or ''),
-            'source':   (rec.data_source  or 'manual')
+            'source':   (rec.data_source  or 'manual'),
+            'id':        rec.id
         }
     result = []
     for emp in employees:

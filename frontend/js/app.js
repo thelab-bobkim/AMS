@@ -244,9 +244,18 @@ createApp({
                 const attRes = await axios.post(`${API}/daou/sync/attendance`, {
                     year: this.selectedYear, month: this.selectedMonth
                 });
+                let slMsg = '';
+                try {
+                    const slRes = await axios.post(`${API}/senselink/sync`, {
+                        year: this.selectedYear, month: this.selectedMonth
+                    });
+                    slMsg = `\nSenseLink: ${slRes.data.synced || 0}건`;
+                } catch(se) {
+                    slMsg = '\nSenseLink: 연결 실패';
+                }
                 await this.loadEmployees();
                 await this.loadAttendance();
-                alert(`동기화 완료!\n직원: ${empRes.data.count}명\n출근기록: ${attRes.data.count}개`);
+                alert(`통합 동기화 완료!\n다우오피스 직원: ${empRes.data.count}명\n다우오피스 출근: ${attRes.data.count}개${slMsg}`);
             } catch (e) {
                 alert('동기화 실패: ' + (e.response?.data?.error || e.message));
             } finally {
