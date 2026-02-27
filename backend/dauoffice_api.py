@@ -17,6 +17,47 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 
+def _extract_department(emp_data):
+    """
+    DauOffice userGroups에서 실제 부서명을 추출한다.
+    우선순위:
+      1) group.get('type') in ('DEPT','dept','department','organization') -> name
+      2) 한국어 + 부서 키워드(본부/팀/부/실/센터/그룹/사업부/담당) 포함
+      3) 한국어 문자 포함
+      4) 첫 번째 그룹 name (fallback)
+    """
+    import re as _re
+    DEPT_KEYWORDS = ['본부', '팀', '부', '실', '센터', '그룹', '사업부', '담당', '사업', '부문']
+    DEPT_TYPES    = {'dept', 'department', 'organization', 'org'}
+    user_groups = emp_data.get('userGroups', [])
+
+    # 1순위: group type 이 dept/organization 인 그룹
+    for g in user_groups:
+        gtype = str(g.get('type', '')).lower()
+        if gtype in DEPT_TYPES:
+            name = g.get('name', '').strip()
+            if name:
+                return name
+
+    # 2순위: 한국어 + 부서 키워드
+    for g in user_groups:
+        name = g.get('name', '').strip()
+        if _re.search(r'[가-힣]', name) and any(kw in name for kw in DEPT_KEYWORDS):
+            return name
+
+    # 3순위: 한국어 포함
+    for g in user_groups:
+        name = g.get('name', '').strip()
+        if _re.search(r'[가-힣]', name):
+            return name
+
+    # 4순위: 첫 번째 그룹 (fallback)
+    if user_groups:
+        return user_groups[0].get('name', '').strip()
+
+    return ''
+
+
 class DauofficeAPIClient:
 
     TOKEN_ENDPOINT = "/public/auth/v1/oauth2/token"
@@ -307,9 +348,7 @@ class DauofficeAPIClient:
                 status      = emp_data.get('status', '')
 
                 user_groups = emp_data.get('userGroups', [])
-                department  = user_groups[0]['name'] if user_groups else ''
-
-                user_groups = emp_data.get('userGroups', [])
+                department  = _extract_department(emp_data)
 
                 position    = emp_data.get('positionName')
 
