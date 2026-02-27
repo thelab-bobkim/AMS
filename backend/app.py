@@ -416,10 +416,10 @@ def senselink_sync():
             if resp.status_code != 200:
                 errors.append(f"relay HTTP {resp.status_code}")
                 break
-            body  = resp.json()
-            raw   = body.get('data', body)
-            recs  = raw if isinstance(raw, list) else []
-            total = body.get('total', 0)
+            body     = resp.json()
+            data_obj = body.get('data', {})
+            recs     = data_obj.get('list', [])
+            total    = data_obj.get('total', 0)
             if not recs:
                 break
 
