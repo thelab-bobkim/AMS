@@ -124,22 +124,22 @@ def get_attendance_records():
         try:
             cin = rec.check_in_time.strftime('%H:%M') if rec.check_in_time else ''
         except Exception:
-            cin = str(rec.check_in_time) if rec.check_in_time else ''
+            cin = str(rec.check_in_time)[:5] if rec.check_in_time else ''
         record_map.setdefault(rec.employee_id, {})[day_key] = {
             'check_in': cin,
-            'type': rec.record_type or 'normal',
-            'note': rec.note or '',
-            'source': rec.data_source or 'manual'
+            'type':     (rec.record_type  or 'normal'),
+            'note':     (rec.note         or ''),
+            'source':   (rec.data_source  or 'manual')
         }
     result = []
     for emp in employees:
         result.append({
-            'id': emp.id,
-            'name': emp.name,
-            'department': emp.department or '',
-            'days': record_map.get(emp.id, {})
+            'id':         emp.id,
+            'name':       (emp.name       or ''),
+            'department': (emp.department or ''),
+            'days':       record_map.get(emp.id, {})
         })
-    return jsonify({'code': 200, 'data': result, 'year': year, 'month': month})
+    return jsonify(result)
 
 @app.route('/api/attendance', methods=['POST'])
 def create_attendance_record():
