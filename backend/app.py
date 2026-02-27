@@ -119,7 +119,7 @@ def get_attendance_records():
 
     # 3) {employee_id: {day: record_dict}} 맵핑
     record_map = {}
-    for rec in attendance_records:
+    for rec in all_records:
         day_key = str(rec.date.day)
         try:
             cin = rec.check_in_time.strftime('%H:%M') if rec.check_in_time else ''
