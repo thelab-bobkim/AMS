@@ -478,9 +478,10 @@ class DauofficeAPIClient:
 
 
 
-                # userGroups 없는 직원(퇴사자/부서노드) 제외
-                if not user_groups:
-                    print(f"[DauofficeAPI] userGroups 없음(퇴사자) 제외: {name} ({login_id})")
+                # 부서 노드 제외: userGroups 없고 직위/사번도 없으면 부서노드로 판단
+                # (단, DEPT_MAP에 있는 재직자는 userGroups 없어도 통과)
+                if not user_groups and not DEPT_MAP.get(login_id) and not position and not emp_number:
+                    print(f"[DauofficeAPI] 부서노드 제외: {name} ({login_id})")
                     skipped_dept += 1
                     continue
 
