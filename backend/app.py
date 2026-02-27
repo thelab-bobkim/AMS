@@ -121,12 +121,15 @@ def get_attendance_records():
     record_map = {}
     for rec in attendance_records:
         day_key = str(rec.date.day)
-        rd = rec.to_dict()
+        try:
+            cin = rec.check_in_time.strftime('%H:%M') if rec.check_in_time else ''
+        except Exception:
+            cin = str(rec.check_in_time) if rec.check_in_time else ''
         record_map.setdefault(rec.employee_id, {})[day_key] = {
-            'check_in': rd.get('check_in_time', rd.get('check_in', '')),
-            'type': rd.get('record_type', 'normal'),
-            'note': rd.get('note', ''),
-            'source': rd.get('data_source', 'manual')
+            'check_in': cin,
+            'type': rec.record_type or 'normal',
+            'note': rec.note or '',
+            'source': rec.data_source or 'manual'
         }
     result = []
     for emp in employees:
