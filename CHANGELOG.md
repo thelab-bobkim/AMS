@@ -33,3 +33,31 @@ TFT팀, 경영지원부, 공공사업본부, 금융사업부, 기업부설연구
 - AWS EC2: 13.125.163.126
 - Docker: attendance-backend (Flask:5000)
 - ngrok relay: https://luke-subfestive-phyliss.ngrok-free.dev
+
+## [v1.1] - 2026-03-02
+
+### 변경 사항
+- **relay_server.py v8 정식 배포**
+  - `start`/`end` 파라미터 지원 추가 (기존 dateTimeFrom/dateTimeTo 병행)
+  - `dept or ALL` 버그 수정 → `dept or 'ALL'` (NameError 수정)
+  - MySQL 직접 연동 (192.168.250.183:3306, bi_slink_base)
+  - Flask 3.1.3 + PyMySQL 1.1.2 환경
+- **start_ngrok_relay.bat 수정**
+  - SENSELINK_URL: `175.198.93.89:8765` → `localhost:8765`
+  - NGROK_DOMAIN: `.app` → `.dev` 도메인 수정
+  - 주석 업데이트
+- **ngrok 업그레이드**: v3.3.1 → v3.36.1 (최소 요구 버전 충족)
+- **Windows 자동 시작 작업 스케줄러 등록**
+  - AMS_relay_server: 로그인 시 relay_server.py 자동 실행
+  - AMS_ngrok_relay: 로그인 시 ngrok 자동 실행
+
+### 아키텍처 변경
+```
+[이전] AWS → ngrok → 175.198.93.89:8765 (SenseLink HTTP API, 불안정)
+[이후] AWS → ngrok → localhost:8765 → MySQL 192.168.250.183 (직접 연동, 안정)
+```
+
+### 검증 결과
+- /health: DB connected, total_records 109,815
+- /attendance (2월): total 7,559건 정상 반환
+- AWS sync (2월): fetched 7,559건, synced 967건, errors 0
