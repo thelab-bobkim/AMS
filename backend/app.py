@@ -262,102 +262,264 @@ def sync_attendance():
         return jsonify({'error': str(e)}), 500
 
 
-# ==================== 엑셀 내보내기 API ====================
+
+# ==================== 엑셀 내보내기 API (개선 버전) ====================
 
 @app.route('/api/export/excel', methods=['GET'])
 def export_excel():
-    """엑셀 파일 내보내기 (기존 형식)"""
+    """엑셀 파일 내보내기 (디자인 개선 버전)"""
+    from openpyxl import Workbook
+    from openpyxl.styles import (Font, Alignment, PatternFill, Border, Side,
+                                  GradientFill)
+    from openpyxl.utils import get_column_letter
+    from openpyxl.styles.differential import DifferentialStyle
+    from openpyxl.formatting.rule import ColorScaleRule, CellIsRule, FormulaRule
+    import calendar
+    from datetime import datetime
+    import io
+
     year = request.args.get('year', type=int)
     month = request.args.get('month', type=int)
-    
+
     if not year or not month:
         return jsonify({'error': '년도와 월을 지정해주세요.'}), 400
-    
-    # 워크북 생성
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "SUM"
-    
-    # 스타일 정의
-    header_font = Font(bold=True)
-    center_alignment = Alignment(horizontal='center', vertical='center')
-    
-    # 헤더 작성
-    headers = ['성 명 ', '부 서 / 팀']
-    
-    # 해당 월의 일수
-    _, last_day = calendar.monthrange(year, month)
-    
-    # 날짜 헤더 추가
-    for day in range(1, last_day + 1):
-        date_obj = datetime(year, month, day)
-        weekday = ['월', '화', '수', '목', '금', '토', '일'][date_obj.weekday()]
-        headers.append(f"{month}-{day:02d}({weekday})")
-    
-    ws.append(headers)
-    
-    # 헤더 스타일 적용
-    for cell in ws[1]:
-        cell.font = header_font
-        cell.alignment = center_alignment
-    
-    # 직원별 데이터 작성
+
     department_filter = request.args.get('department', '')
+    _, last_day = calendar.monthrange(year, month)
+
+    # ── 직원 조회 ──────────────────────────────────────────────────
     query = Employee.query.filter_by(is_active=True)
     if department_filter:
         query = query.filter_by(department=department_filter)
     employees = query.order_by(Employee.department, Employee.name).all()
-    
-    # 엑셀 파일명에 부서 반영
-    filename = f"출근기록_{year}.{month:02d}_{department_filter or '전체'}.xlsx"
-    
-    for emp in employees:
-        row_data = [emp.name, emp.department or '']
-        
-        # 해당 월의 출근 기록 조회
+
+    # ── 출근 기록 일괄 조회 (N+1 방지) ────────────────────────────
+    from datetime import date as date_type
+    start_date = date_type(year, month, 1)
+    end_date   = date_type(year, month, last_day)
+    emp_ids    = [e.id for e in employees]
+    all_records = AttendanceRecord.query.filter(
+        AttendanceRecord.employee_id.in_(emp_ids),
+        AttendanceRecord.date >= start_date,
+        AttendanceRecord.date <= end_date
+    ).all()
+    record_map = {}
+    for rec in all_records:
+        record_map.setdefault(rec.employee_id, {})[rec.date.day] = rec
+
+    # ── 워크북 생성 ────────────────────────────────────────────────
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"{year}.{month:02d} 근태"
+
+    # ── 색상 팔레트 ────────────────────────────────────────────────
+    C_TITLE_BG   = "1F4E79"   # 진한 네이비 (제목행)
+    C_TITLE_FG   = "FFFFFF"
+    C_SAT_BG     = "D6E4F7"   # 연한 파랑 (토요일)
+    C_SUN_BG     = "FDECEA"   # 연한 빨강 (일요일)
+    C_WEEK_BG    = "EBF3FB"   # 매우 연한 파랑 (평일 날짜행)
+    C_SUBHDR_BG  = "2E75B6"   # 중간 파랑 (성명/부서 헤더)
+    C_DEPT_BG    = "D9E1F2"   # 연보라 (부서 그룹행)
+    C_LEAVE_BG   = "FFF2CC"   # 연노랑 (연차/반차)
+    C_TRIP_BG    = "E2EFDA"   # 연초록 (출장)
+    C_TIME_FG    = "1F4E79"   # 출근시각 글자색
+    C_LATE_BG    = "FCE4D6"   # 연주황 (지각: 09:30 이후)
+    C_ODD_BG     = "F8FBFF"   # 홀수행 배경
+    C_EVEN_BG    = "FFFFFF"   # 짝수행 배경
+    C_BORDER     = "B8CCE4"   # 테두리
+
+    def fill(hex_color):
+        return PatternFill("solid", fgColor=hex_color)
+
+    def font(bold=False, color="000000", size=10, name="맑은 고딕"):
+        return Font(bold=bold, color=color, size=size, name=name)
+
+    def center(wrap=False):
+        return Alignment(horizontal='center', vertical='center',
+                         wrap_text=wrap)
+
+    def border(color=C_BORDER, style='thin'):
+        s = Side(style=style, color=color)
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    def med_border(color=C_BORDER):
+        thin = Side(style='thin',   color=color)
+        med  = Side(style='medium', color="4472C4")
+        return Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # ── 행1: 대제목 ────────────────────────────────────────────────
+    total_cols = 2 + last_day
+    ws.merge_cells(start_row=1, start_column=1,
+                   end_row=1,   end_column=total_cols)
+    title_cell = ws.cell(1, 1,
+        value=f"{'[' + department_filter + '] ' if department_filter else ''}"
+              f"{year}년 {month}월 출근 현황")
+    title_cell.font      = Font(bold=True, color=C_TITLE_FG, size=14,
+                                name="맑은 고딕")
+    title_cell.fill      = fill(C_TITLE_BG)
+    title_cell.alignment = center()
+    ws.row_dimensions[1].height = 32
+
+    # ── 행2: 날짜 헤더 ─────────────────────────────────────────────
+    ws.cell(2, 1, "성  명").font      = font(True, C_TITLE_FG, 10)
+    ws.cell(2, 1).fill                = fill(C_SUBHDR_BG)
+    ws.cell(2, 1).alignment           = center()
+    ws.cell(2, 1).border              = border("4472C4", "medium")
+
+    ws.cell(2, 2, "부서 / 팀").font   = font(True, C_TITLE_FG, 10)
+    ws.cell(2, 2).fill                = fill(C_SUBHDR_BG)
+    ws.cell(2, 2).alignment           = center()
+    ws.cell(2, 2).border              = border("4472C4", "medium")
+
+    for day in range(1, last_day + 1):
+        d   = datetime(year, month, day)
+        wd  = d.weekday()               # 0=월 … 6=일
+        col = day + 2
+        wday_str = ['월','화','수','목','금','토','일'][wd]
+        c = ws.cell(2, col, f"{day}\n({wday_str})")
+        c.alignment = center(wrap=True)
+        c.border    = border()
+        c.font      = font(True, size=9)
+        if wd == 5:                     # 토
+            c.fill = fill(C_SAT_BG)
+            c.font = font(True, "2E75B6", 9)
+        elif wd == 6:                   # 일
+            c.fill = fill(C_SUN_BG)
+            c.font = font(True, "C00000", 9)
+        else:
+            c.fill = fill(C_WEEK_BG)
+    ws.row_dimensions[2].height = 30
+
+    # ── 열 너비 설정 ───────────────────────────────────────────────
+    ws.column_dimensions['A'].width = 12   # 성명
+    ws.column_dimensions['B'].width = 16   # 부서
+    for day in range(1, last_day + 1):
+        ws.column_dimensions[get_column_letter(day + 2)].width = 9.5
+
+    # ── 데이터 행 ──────────────────────────────────────────────────
+    prev_dept = None
+    data_row  = 3
+
+    for idx, emp in enumerate(employees):
+        dept = emp.department or '미지정'
+        wd   = data_row
+
+        # 부서가 바뀌면 그룹 구분행 삽입
+        if dept != prev_dept:
+            if prev_dept is not None:
+                ws.row_dimensions[wd].height = 6
+                for c in range(1, total_cols + 1):
+                    ws.cell(wd, c).fill = fill("DAEEF3")
+                data_row += 1
+                wd = data_row
+            prev_dept = dept
+
+        row_bg = C_ODD_BG if idx % 2 == 0 else C_EVEN_BG
+
+        # 성명
+        nc = ws.cell(wd, 1, emp.name)
+        nc.font      = font(True, size=10)
+        nc.alignment = center()
+        nc.fill      = fill(row_bg)
+        nc.border    = border()
+
+        # 부서
+        dc = ws.cell(wd, 2, dept)
+        dc.font      = font(size=9, color="404040")
+        dc.alignment = center()
+        dc.fill      = fill(row_bg)
+        dc.border    = border()
+
+        # 날짜별 출근기록
         for day in range(1, last_day + 1):
-            date_obj = datetime(year, month, day).date()
-            
-            record = AttendanceRecord.query.filter_by(
-                employee_id=emp.id,
-                date=date_obj
-            ).first()
-            
-            cell_value = ''
-            
-            if record:
-                if record.record_type == 'annual_leave':
-                    cell_value = '연 차'
-                elif record.record_type == 'half_leave':
-                    cell_value = '반 차'
-                elif record.record_type == 'substitute_holiday':
-                    cell_value = '대체휴무'
-                elif record.record_type == 'business_trip':
-                    cell_value = f"출장-{record.note}" if record.note else '출 장'
-                elif record.check_in_time:
-                    cell_value = record.check_in_time.strftime('%H:%M:%S')
-                    if record.note:
-                        cell_value = f"{cell_value} / {record.note}"
-            
-            row_data.append(cell_value)
-        
-        ws.append(row_data)
-    
-    # 파일을 메모리에 저장
+            col = day + 2
+            d   = datetime(year, month, day)
+            wd2 = d.weekday()
+            rec = record_map.get(emp.id, {}).get(day)
+
+            cell_val  = ''
+            cell_fill = row_bg
+            cell_font = font(size=9)
+            cell_bold = False
+
+            if wd2 == 5:   cell_fill = C_SAT_BG
+            elif wd2 == 6: cell_fill = C_SUN_BG
+
+            if rec:
+                rt = rec.record_type or 'normal'
+                if rt == 'annual_leave':
+                    cell_val  = '연 차'
+                    cell_fill = C_LEAVE_BG
+                    cell_bold = True
+                elif rt == 'half_leave':
+                    cell_val  = '반 차'
+                    cell_fill = C_LEAVE_BG
+                elif rt == 'substitute_holiday':
+                    cell_val  = '대체휴무'
+                    cell_fill = "E2EFDA"
+                elif rt == 'business_trip':
+                    cell_val  = f"출장\n{rec.note}" if rec.note else '출 장'
+                    cell_fill = C_TRIP_BG
+                elif rec.check_in_time:
+                    try:
+                        ci = rec.check_in_time
+                        hh = ci.hour if hasattr(ci,'hour') else int(str(ci)[:2])
+                        mm = ci.minute if hasattr(ci,'minute') else int(str(ci)[3:5])
+                        cell_val = f"{hh:02d}:{mm:02d}"
+                        # 지각 체크 (09:30 초과)
+                        if (hh, mm) > (9, 30):
+                            cell_fill = C_LATE_BG
+                            cell_bold = True
+                        else:
+                            cell_fill = row_bg
+                    except Exception:
+                        cell_val = str(rec.check_in_time)[:5]
+            elif wd2 < 5:
+                cell_val = ''   # 평일 미출근은 빈칸
+
+            c = ws.cell(wd, col, cell_val)
+            c.font      = Font(bold=cell_bold, color=C_TIME_FG if cell_val and ':' in cell_val else "000000",
+                               size=9, name="맑은 고딕")
+            c.fill      = fill(cell_fill)
+            c.alignment = center(wrap=True)
+            c.border    = border()
+
+        ws.row_dimensions[wd].height = 18
+        data_row += 1
+
+    # ── 마지막 구분선 ──────────────────────────────────────────────
+    for c in range(1, total_cols + 1):
+        cell = ws.cell(data_row, c)
+        cell.border = Border(
+            top=Side(style='medium', color="4472C4")
+        )
+
+    # ── 창 고정 (성명+부서, 날짜행 고정) ──────────────────────────
+    ws.freeze_panes = ws.cell(3, 3)
+
+    # ── 인쇄 설정 ─────────────────────────────────────────────────
+    from openpyxl.worksheet.page import PageMargins
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.fitToPage   = True
+    ws.page_setup.fitToWidth  = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_margins           = PageMargins(left=0.5, right=0.5,
+                                            top=0.75, bottom=0.75)
+    ws.print_title_rows = '1:2'   # 인쇄 시 1~2행 반복
+
+    # ── 파일 출력 ─────────────────────────────────────────────────
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
-    
-    # 파일명
-    # filename = f"출근기록_{year}.{month:02d}.xlsx"  # 위에서 이미 설정됨
-    
+
+    filename = (f"출근기록_{year}.{month:02d}"
+                f"{'_' + department_filter if department_filter else ''}.xlsx")
     return send_file(
         output,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
         download_name=filename
     )
-
 
 # ==================== 헬스 체크 ====================
 
