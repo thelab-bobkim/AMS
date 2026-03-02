@@ -331,7 +331,7 @@ def export_excel():
     def fill(hex_color):
         return PatternFill("solid", fgColor=hex_color)
 
-    def font(bold=False, color="000000", size=10, name="맑은 고딕"):
+    def font(bold=False, color="000000", size=10, name="Malgun Gothic"):
         return Font(bold=bold, color=color, size=size, name=name)
 
     def center(wrap=False):
@@ -355,7 +355,7 @@ def export_excel():
         value=f"{'[' + department_filter + '] ' if department_filter else ''}"
               f"{year}년 {month}월 출근 현황")
     title_cell.font      = Font(bold=True, color=C_TITLE_FG, size=14,
-                                name="맑은 고딕")
+                                name="Malgun Gothic")
     title_cell.fill      = fill(C_TITLE_BG)
     title_cell.alignment = center()
     ws.row_dimensions[1].height = 32
@@ -479,7 +479,7 @@ def export_excel():
 
             c = ws.cell(wd, col, cell_val)
             c.font      = Font(bold=cell_bold, color=C_TIME_FG if cell_val and ':' in cell_val else "000000",
-                               size=9, name="맑은 고딕")
+                               size=9, name="Malgun Gothic")
             c.fill      = fill(cell_fill)
             c.alignment = center(wrap=True)
             c.border    = border()
