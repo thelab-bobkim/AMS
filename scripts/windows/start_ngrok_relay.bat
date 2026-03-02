@@ -4,6 +4,7 @@
 ::  위치: C:\AMS\start_ngrok_relay.bat
 ::  설명: 부팅 시 ngrok을 백그라운드로 자동 실행
 ::  수정: 2026-03-02 - 도메인 .dev 수정, WinGet 경로 반영
+::         localhost:8765 로 변경 (relay_server.py 직접 연동)
 :: ================================================================
 
 title AMS SenseLink Relay
@@ -13,8 +14,8 @@ SET NGROK_PATH=C:\Users\hp\AppData\Local\Microsoft\WinGet\Packages\Ngrok.Ngrok_M
 :: ngrok이 PATH에 등록되어 있으면 아래 줄 사용
 :: SET NGROK_PATH=ngrok
 
-:: SenseLink 서버 주소
-SET SENSELINK_URL=http://175.198.93.89:8765
+:: SenseLink 중계 서버 주소 (로컬 relay_server.py)
+SET SENSELINK_URL=http://localhost:8765
 
 :: ngrok static domain (올바른 .dev 도메인)
 SET NGROK_DOMAIN=luke-subfestive-phyliss.ngrok-free.dev
@@ -44,11 +45,11 @@ timeout /t 5 /nobreak >nul
 tasklist /FI "IMAGENAME eq ngrok.exe" 2>nul | find /I "ngrok.exe" >nul
 if %ERRORLEVEL% == 0 (
     echo [SUCCESS] ngrok 실행 성공 >> "%LOG_FILE%"
-    echo ✅ ngrok relay 시작 완료
+    echo [OK] ngrok relay 시작 완료
     echo    Domain: https://%NGROK_DOMAIN%
     echo    Target: %SENSELINK_URL%
 ) else (
     echo [ERROR] ngrok 실행 실패 >> "%LOG_FILE%"
-    echo ❌ ngrok 실행 실패 - 경로를 확인하세요: %NGROK_PATH%
+    echo [ERROR] ngrok 실행 실패 - 경로를 확인하세요: %NGROK_PATH%
     pause
 )
