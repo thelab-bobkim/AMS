@@ -88,7 +88,7 @@ def attendance():
         rows = rows_to_list(cur)
         conn.close()
 
-        log.info(f"[attendance] {date_from}~{date_to} dept={dept or ALL} total={total} page={page}")
+        log.info(f"[attendance] {date_from}~{date_to} dept={dept or 'ALL'} total={total} page={page}")
         return jsonify({
             "code": 200, "message": "success",
             "data": {"total": total, "page": page, "size": size, "list": rows}
@@ -184,4 +184,3 @@ if __name__ == "__main__":
     print("  /users               : 사용자 목록")
     print("=" * 55)
     app.run(host="0.0.0.0", port=8765, debug=False)
-
