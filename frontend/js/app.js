@@ -264,8 +264,31 @@ createApp({
         },
 
         exportExcel() {
+            // 브라우저 뷰어 방지 → <a download> 강제 파일 저장
             const dept = this.selectedDept ? `&department=${encodeURIComponent(this.selectedDept)}` : '';
-            window.open(`${API}/export/excel?year=${this.selectedYear}&month=${this.selectedMonth}${dept}`, '_blank');
+            const url  = `${API}/export/excel?year=${this.selectedYear}&month=${this.selectedMonth}${dept}`;
+            const deptLabel = this.selectedDept || '전체';
+            const fname = `출근기록_${this.selectedYear}.${String(this.selectedMonth).padStart(2,'0')}_${deptLabel}.xlsx`;
+
+            this.globalLoading = true;
+            this.loadingMessage = '엑셀 파일 생성 중...';
+
+            fetch(url)
+                .then(res => {
+                    if (!res.ok) throw new Error('서버 오류: ' + res.status);
+                    return res.blob();
+                })
+                .then(blob => {
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = fname;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(a.href);
+                })
+                .catch(err => alert('엑셀 다운로드 실패: ' + err.message))
+                .finally(() => { this.globalLoading = false; });
         }
     }
 }).mount('#app');
