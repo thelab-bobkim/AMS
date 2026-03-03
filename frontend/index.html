@@ -141,7 +141,7 @@
                         </td>
                         <td v-for="day in daysInMonth" :key="day.day"
                             :class="{'weekend': day.isWeekend, 'editable-cell': true}"
-                            @click="editCell(emp.employee, day.day)"
+                            @click="editCell(emp, day.day)"
                             style="text-align:center;">
                             <span v-html="getCellDisplay(emp, day.day)"></span>
                         </td>
@@ -294,6 +294,6 @@
     </div>
 </div>
 
-<script src="js/app.js?v=1.2.0"></script>
+<script src="js/app.js?v=1.2.1"></script>
 </body>
 </html>
