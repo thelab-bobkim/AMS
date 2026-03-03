@@ -168,8 +168,12 @@ def create_attendance_record():
     ).first()
     
     if existing:
-        # 업데이트
-        existing.check_in_time = check_in_time
+        # 업데이트 (check_in_time이 명시적으로 전달된 경우만 덮어씀)
+        if 'check_in_time' in (request.json or {}):
+            existing.check_in_time = check_in_time
+        # record_type이 비출근 유형이면 check_in_time 보존
+        if record_type not in ('normal', 'remote_work'):
+            pass  # check_in_time 유지
         existing.record_type = record_type
         existing.note = note
         existing.data_source = 'manual'
