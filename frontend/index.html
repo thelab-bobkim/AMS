@@ -34,6 +34,29 @@
         .editable-cell:hover { background-color: #e9ecef; }
         .filter-bar { background: white; border-radius: 8px; padding: 12px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
         .badge-dauoffice { background-color: #17a2b8; font-size: 9px; }
+        /* 추가 근태 유형 스타일 */
+        .absent      { color: #6c757d; font-weight: bold; }
+        .sick-leave  { color: #e83e8c; font-weight: bold; }
+        .remote-work { color: #20c997; font-weight: bold; }
+        /* 빈 셀 hover 힌트 */
+        .editable-cell:empty:hover { background-color: #e8f4fd; }
+        /* 토스트 */
+        .toast-box {
+            position: fixed; bottom: 24px; right: 24px; z-index: 99999;
+            min-width: 280px; padding: 14px 20px; border-radius: 8px;
+            font-size: 14px; font-weight: 500; color: white;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            animation: fadeInUp 0.3s ease;
+        }
+        .toast-success { background: #198754; }
+        .toast-danger  { background: #dc3545; }
+        .toast-warning { background: #fd7e14; }
+        @keyframes fadeInUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+        /* 모달 신규/수정 구분 */
+        .modal-new  .modal-header { background: #0d6efd; color: white; }
+        .modal-edit .modal-header { background: #198754; color: white; }
+        .modal-new  .modal-header .btn-close { filter: invert(1); }
+        .modal-edit .modal-header .btn-close { filter: invert(1); }
     </style>
 </head>
 <body>
@@ -194,42 +217,71 @@
     <!-- 출근 기록 편집 모달 -->
     <div class="modal fade show d-block" tabindex="-1" v-if="showEditModal" style="background:rgba(0,0,0,0.5)">
         <div class="modal-dialog">
-            <div class="modal-content">
+            <div class="modal-content" :class="editingRecord.isNew ? 'modal-new' : 'modal-edit'">
                 <div class="modal-header">
-                    <h5 class="modal-title">✏️ 출근 기록 입력</h5>
+                    <h5 class="modal-title">{{ editModalTitle }}</h5>
                     <button type="button" class="btn-close" @click="showEditModal = false"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-2"><strong>직원:</strong> {{ editingRecord.employeeName }}</div>
-                    <div class="mb-3"><strong>날짜:</strong> {{ editingRecord.date }}</div>
+                    <!-- 직원 정보 -->
+                    <div class="p-2 mb-3 rounded" style="background:#f8f9fa; border-left:4px solid #0d6efd;">
+                        <div><strong>👤 직원:</strong> {{ editingRecord.employeeName }}</div>
+                        <div class="text-muted small">{{ editingRecord.department }}</div>
+                        <div><strong>📅 날짜:</strong> {{ editingRecord.date }}</div>
+                        <div v-if="!editingRecord.isNew" class="mt-1">
+                            <span class="badge bg-success">기존 기록 수정</span>
+                        </div>
+                        <div v-else class="mt-1">
+                            <span class="badge bg-primary">새 기록 추가</span>
+                        </div>
+                    </div>
+                    <!-- 기록 유형 -->
                     <div class="mb-3">
-                        <label class="form-label fw-bold">기록 유형</label>
+                        <label class="form-label fw-bold">📋 근태 유형</label>
                         <select class="form-select" v-model="editingRecord.recordType">
-                            <option value="normal">정상 출근</option>
-                            <option value="annual_leave">연차</option>
-                            <option value="half_leave">반차</option>
-                            <option value="substitute_holiday">대체휴무</option>
-                            <option value="business_trip">출장</option>
-                            <option value="absent">결근</option>
+                            <optgroup label="출근">
+                                <option value="normal">✅ 정상 출근</option>
+                                <option value="remote_work">🏠 재택근무</option>
+                            </optgroup>
+                            <optgroup label="휴가">
+                                <option value="annual_leave">🌴 연차</option>
+                                <option value="half_leave_am">🌅 반차 (오전)</option>
+                                <option value="half_leave_pm">🌆 반차 (오후)</option>
+                                <option value="substitute_holiday">🔄 대체휴무</option>
+                                <option value="sick_leave">🏥 병가</option>
+                            </optgroup>
+                            <optgroup label="기타">
+                                <option value="business_trip">✈️ 출장</option>
+                                <option value="absent">❌ 결근</option>
+                            </optgroup>
                         </select>
                     </div>
-                    <div class="mb-3" v-if="editingRecord.recordType === 'normal'">
-                        <label class="form-label fw-bold">출근 시간</label>
-                        <input type="time" class="form-control" v-model="editingRecord.checkInTime" step="1">
+                    <!-- 출근 시간 (정상출근/재택근무) -->
+                    <div class="mb-3" v-if="editingRecord.recordType === 'normal' || editingRecord.recordType === 'remote_work'">
+                        <label class="form-label fw-bold">⏰ 출근 시간</label>
+                        <input type="time" class="form-control" v-model="editingRecord.checkInTime">
+                        <div class="form-text">비워두면 시간 미입력 상태로 저장됩니다</div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">메모</label>
+                    <!-- 메모 -->
+                    <div class="mb-2">
+                        <label class="form-label fw-bold">📝 메모 <span class="text-muted fw-normal">(선택)</span></label>
                         <input type="text" class="form-control" v-model="editingRecord.note"
-                               placeholder="예: 출장-셀락바이오">
+                               :placeholder="editingRecord.recordType === 'business_trip' ? '예: 셀락바이오, 서울 출장' : '예: 조퇴, 특이사항 등'">
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" @click="showEditModal = false">취소</button>
-                    <button type="button" class="btn btn-danger btn-sm" @click="deleteRecord" v-if="editingRecord.recordId">삭제</button>
+                    <button type="button" class="btn btn-outline-danger btn-sm" @click="deleteRecord"
+                            v-if="editingRecord.recordId" title="이 기록 삭제">🗑️ 삭제</button>
                     <button type="button" class="btn btn-primary" @click="saveRecord">💾 저장</button>
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- 토스트 알림 -->
+    <div v-if="toastMessage" :class="['toast-box', 'toast-' + toastType]">
+        {{ toastMessage }}
     </div>
 
     <!-- 로딩 오버레이 (전체) -->
@@ -242,6 +294,6 @@
     </div>
 </div>
 
-<script src="js/app.js?v=1.1.1"></script>
+<script src="js/app.js?v=1.2.0"></script>
 </body>
 </html>
