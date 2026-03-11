@@ -95,20 +95,18 @@ def require_admin(f):
 def login():
     """로그인 API
     - 관리자: 다우오피스 계정 ID (htkim/hnsong/dijo) + 관리자 비밀번호
-    - 일반직원: 직원 이름(한글) + 비밀번호 (기본: 이름 그대로)
+    - 일반직원: 다우오피스 영문 ID (dauoffice_user_id) + 공통 비밀번호
+                없으면 한글 이름으로도 로그인 가능 (수동 등록 직원 대비)
     """
     data = request.json or {}
     username = data.get('username', '').strip()
     password = data.get('password', '').strip()
-    role     = data.get('role', 'user')  # 'admin' or 'user'
 
     if not username or not password:
         return jsonify({'error': '아이디와 비밀번호를 입력하세요.'}), 400
 
-    # ── 관리자 로그인 ──────────────────────────────
-    if role == 'admin' or username in ADMIN_USERS:
-        if username not in ADMIN_USERS:
-            return jsonify({'error': '관리자 계정이 아닙니다.'}), 403
+    # ── 관리자 로그인 ──────────────────────────────────────────
+    if username in ADMIN_USERS:
         if password != ADMIN_PASSWORD:
             return jsonify({'error': '비밀번호가 틀렸습니다.'}), 401
         token = make_token(username, username, True)
@@ -120,14 +118,22 @@ def login():
             'role': 'admin'
         })
 
-    # ── 일반 직원 로그인 ───────────────────────────
-    # 직원 이름으로 DB 조회
-    emp = Employee.query.filter_by(name=username, is_active=True).first()
-    if not emp:
-        return jsonify({'error': f'직원 "{username}"을(를) 찾을 수 없습니다.'}), 401
+    # ── 일반 직원 로그인 ───────────────────────────────────────
+    # 1순위: 다우오피스 영문 ID (dauoffice_user_id) 로 조회
+    emp = Employee.query.filter_by(dauoffice_user_id=username, is_active=True).first()
 
-    # 비밀번호 검증: 기본값은 이름 그대로, .env USER_DEFAULT_PASSWORD 오버라이드 가능
-    default_pw = os.environ.get('USER_DEFAULT_PASSWORD', username)
+    # 2순위: 한글 이름으로 조회 (수동 등록 직원 대비)
+    if not emp:
+        emp = Employee.query.filter_by(name=username, is_active=True).first()
+
+    if not emp:
+        return jsonify({'error': f'"{username}" 계정을 찾을 수 없습니다.\n다우오피스 ID 또는 이름을 확인하세요.'}), 401
+
+    # 비밀번호 검증: .env USER_DEFAULT_PASSWORD (미설정 시 기본값 1234)
+    default_pw = os.environ.get('USER_DEFAULT_PASSWORD', '1234')
+    # 빈값이면 기본값 1234 사용
+    if not default_pw.strip():
+        default_pw = '1234'
     if password != default_pw:
         return jsonify({'error': '비밀번호가 틀렸습니다.'}), 401
 
@@ -136,6 +142,7 @@ def login():
         'token': token,
         'username': emp.name,
         'display_name': emp.name,
+        'dauoffice_id': emp.dauoffice_user_id or '',
         'is_admin': False,
         'role': 'user',
         'employee_id': emp.id
