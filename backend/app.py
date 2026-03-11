@@ -1,10 +1,10 @@
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from datetime import datetime, timedelta
-from models import db, Employee, AttendanceRecord, AdminUser
+from models import db, Employee, AttendanceRecord
 from config import Config
 from dauoffice_api import DauofficeAPIClient
-import io, os, jwt, bcrypt
+import io, os, jwt
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 import calendar
@@ -27,30 +27,26 @@ if client_id:
         api_url=app.config.get('DAUOFFICE_API_URL', 'https://api.daouoffice.com')
     )
 
+# ==================== 다우오피스 관리자 계정 (.env 기반) ====================
+# .env에 등록된 계정 ID 목록 (htkim,hnsong,dijo)
+ADMIN_USERS = [u.strip() for u in os.environ.get('ADMIN_USERS', 'htkim,hnsong,dijo').split(',') if u.strip()]
+# 관리자 공통 비밀번호 (.env에 ADMIN_PASSWORD 설정, 미설정 시 기본값)
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'DstiAdmin2026!')
+
+print(f"[App] 관리자 계정: {ADMIN_USERS}")
+
 with app.app_context():
     db.create_all()
-    # 관리자 계정 초기화 (최초 1회)
-    if AdminUser.query.count() == 0:
-        default_admins = [
-            ('admin1', 'Admin1234!'),
-            ('admin2', 'Admin1234!'),
-            ('admin3', 'Admin1234!'),
-        ]
-        for uname, pwd in default_admins:
-            u = AdminUser(username=uname)
-            u.set_password(pwd)
-            db.session.add(u)
-        db.session.commit()
-        print("[App] 기본 관리자 계정 3개 생성 완료 (비밀번호 변경 권장)")
 
 
 # ==================== JWT 인증 헬퍼 ====================
 
-def make_token(user_id, username, is_admin):
+def make_token(user_id, username, is_admin, employee_id=None):
     payload = {
         'user_id':  user_id,
         'username': username,
         'is_admin': is_admin,
+        'employee_id': employee_id,  # 일반 사용자 전용
         'exp': datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
@@ -97,17 +93,53 @@ def require_admin(f):
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """관리자 로그인"""
+    """로그인 API
+    - 관리자: 다우오피스 계정 ID (htkim/hnsong/dijo) + 관리자 비밀번호
+    - 일반직원: 직원 이름(한글) + 비밀번호 (기본: 이름 그대로)
+    """
     data = request.json or {}
     username = data.get('username', '').strip()
-    password = data.get('password', '')
+    password = data.get('password', '').strip()
+    role     = data.get('role', 'user')  # 'admin' or 'user'
+
     if not username or not password:
         return jsonify({'error': '아이디와 비밀번호를 입력하세요.'}), 400
-    user = AdminUser.query.filter_by(username=username, is_active=True).first()
-    if not user or not user.check_password(password):
-        return jsonify({'error': '아이디 또는 비밀번호가 틀렸습니다.'}), 401
-    token = make_token(user.id, user.username, True)
-    return jsonify({'token': token, 'username': user.username, 'is_admin': True})
+
+    # ── 관리자 로그인 ──────────────────────────────
+    if role == 'admin' or username in ADMIN_USERS:
+        if username not in ADMIN_USERS:
+            return jsonify({'error': '관리자 계정이 아닙니다.'}), 403
+        if password != ADMIN_PASSWORD:
+            return jsonify({'error': '비밀번호가 틀렸습니다.'}), 401
+        token = make_token(username, username, True)
+        return jsonify({
+            'token': token,
+            'username': username,
+            'display_name': username,
+            'is_admin': True,
+            'role': 'admin'
+        })
+
+    # ── 일반 직원 로그인 ───────────────────────────
+    # 직원 이름으로 DB 조회
+    emp = Employee.query.filter_by(name=username, is_active=True).first()
+    if not emp:
+        return jsonify({'error': f'직원 "{username}"을(를) 찾을 수 없습니다.'}), 401
+
+    # 비밀번호 검증: 기본값은 이름 그대로, .env USER_DEFAULT_PASSWORD 오버라이드 가능
+    default_pw = os.environ.get('USER_DEFAULT_PASSWORD', username)
+    if password != default_pw:
+        return jsonify({'error': '비밀번호가 틀렸습니다.'}), 401
+
+    token = make_token(emp.id, emp.name, False, employee_id=emp.id)
+    return jsonify({
+        'token': token,
+        'username': emp.name,
+        'display_name': emp.name,
+        'is_admin': False,
+        'role': 'user',
+        'employee_id': emp.id
+    })
 
 @app.route('/api/auth/verify', methods=['GET'])
 def verify_token():
@@ -117,40 +149,11 @@ def verify_token():
         return jsonify({'valid': False}), 401
     return jsonify({'valid': True, 'username': user.get('username'), 'is_admin': user.get('is_admin')})
 
-@app.route('/api/auth/change-password', methods=['POST'])
-@require_admin
-def change_password():
-    """관리자 비밀번호 변경"""
-    data = request.json or {}
-    old_pw  = data.get('old_password', '')
-    new_pw  = data.get('new_password', '')
-    if len(new_pw) < 6:
-        return jsonify({'error': '비밀번호는 6자 이상이어야 합니다.'}), 400
-    user = AdminUser.query.get(request.current_user['user_id'])
-    if not user or not user.check_password(old_pw):
-        return jsonify({'error': '현재 비밀번호가 틀렸습니다.'}), 401
-    user.set_password(new_pw)
-    db.session.commit()
-    return jsonify({'message': '비밀번호가 변경되었습니다.'})
-
 @app.route('/api/auth/admins', methods=['GET'])
 @require_admin
 def list_admins():
-    """관리자 목록 조회"""
-    return jsonify([u.to_dict() for u in AdminUser.query.all()])
-
-@app.route('/api/auth/admins/<int:admin_id>/password', methods=['PUT'])
-@require_admin
-def reset_admin_password(admin_id):
-    """다른 관리자 비밀번호 초기화"""
-    data = request.json or {}
-    new_pw = data.get('new_password', '')
-    if len(new_pw) < 6:
-        return jsonify({'error': '비밀번호는 6자 이상이어야 합니다.'}), 400
-    user = AdminUser.query.get_or_404(admin_id)
-    user.set_password(new_pw)
-    db.session.commit()
-    return jsonify({'message': f'{user.username} 비밀번호 변경 완료'})
+    """관리자 목록 조회 (.env 기반)"""
+    return jsonify([{'username': u, 'is_active': True} for u in ADMIN_USERS])
 
 
 # ==================== 직원 관리 API ====================
